@@ -179,6 +179,9 @@ services:
       FLEETWIRE_KEYRING_ROOT_KEY_FILE: /secrets/keyring-root.key
       FLEETWIRE_CRL_FILE: /state/crl/crl.pem
       FLEETWIRE_EXPORT_DIR: /state/exports
+      # The load generator enrolls thousands of devices from one address.
+      FLEETWIRE_API_ENROLL_RATE_LIMIT: "1000"
+      FLEETWIRE_API_ENROLL_RATE_BURST: "2000"
     volumes:
       - ./secrets:/secrets:ro
       - ./.state/keyring:/state/keyring
