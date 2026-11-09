@@ -209,8 +209,10 @@ func Run(ctx context.Context, o Options) ([]Row, error) {
 	return rows, nil
 }
 
-func (r *run) scenario(ctx context.Context, sc *scenario) (Row, error) {
-	row := Row{Scenario: sc.name, Devices: r.o.Devices, WALSync: r.o.WALSync, Started: time.Now().UTC(), Recovery: "-"}
+// The results are named so that the deferred duration lands in the row that
+// is returned, not in a local copy.
+func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
+	row = Row{Scenario: sc.name, Devices: r.o.Devices, WALSync: r.o.WALSync, Started: time.Now().UTC(), Recovery: "-"}
 	start := time.Now()
 	defer func() { row.Duration = time.Since(start).Round(time.Second).String() }()
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
