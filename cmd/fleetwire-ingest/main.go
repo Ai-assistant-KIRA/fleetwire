@@ -36,7 +36,7 @@ import (
 type ingestConfig struct {
 	svc.Common
 	svc.Kafka
-	DatabaseURL  string `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" secret:"true" help:"PostgreSQL URL for the runtime role (fleetwire_app)."`
+	DatabaseURL  string `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" secret:"true" help:"PostgreSQL URL for the service login: the runtime role, or a member of it, never the schema owner."`
 	DBMaxConns   int32  `env:"FLEETWIRE_DATABASE_MAX_CONNS" flag:"database-max-conns" default:"20" help:"Connection pool size."`
 	Replication  int    `env:"FLEETWIRE_KAFKA_REPLICATION" flag:"kafka-replication" default:"3" help:"Replication factor for ensure-topics."`
 	Group        string `env:"FLEETWIRE_KAFKA_GROUP" flag:"kafka-group" default:"fleetwire-ingest" help:"Consumer group. With Charmed Kafka it must start with the relation's consumer-group-prefix."`
@@ -48,7 +48,7 @@ type ingestConfig struct {
 	// One of the two keyring backends: the directory shared with the API on
 	// one host, or the API's keyring listener when they run apart.
 	KeyringDir         string `env:"FLEETWIRE_KEYRING_DIR" flag:"keyring-dir" help:"Directory of per-tenant KEK files, shared with the API. Set this or FLEETWIRE_KEYRING_URL."`
-	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs (mode 0400). Only with FLEETWIRE_KEYRING_DIR."`
+	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600). Only with FLEETWIRE_KEYRING_DIR."`
 	KeyringURL         string `env:"FLEETWIRE_KEYRING_URL" flag:"keyring-url" help:"The API's keyring listener, for example https://api:8445. Set this or FLEETWIRE_KEYRING_DIR."`
 	KeyringCertFile    string `env:"FLEETWIRE_KEYRING_CERT_FILE" flag:"keyring-cert" help:"Client certificate for the keyring listener. Default: FLEETWIRE_MQTT_CERT_FILE."`
 	KeyringKeyFile     string `env:"FLEETWIRE_KEYRING_KEY_FILE" flag:"keyring-key" help:"Its private key. Default: FLEETWIRE_MQTT_KEY_FILE."`

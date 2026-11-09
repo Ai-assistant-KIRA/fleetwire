@@ -10,7 +10,7 @@ import (
 type apiConfig struct {
 	cmd string
 
-	DatabaseURL      string `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" secret:"true" help:"PostgreSQL URL for the runtime role (fleetwire_app)."`
+	DatabaseURL      string `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" secret:"true" help:"PostgreSQL URL for the service login: the runtime role, or a member of it, never the schema owner."`
 	OwnerDatabaseURL string `env:"FLEETWIRE_DATABASE_OWNER_URL" flag:"database-owner-url" secret:"true" help:"PostgreSQL URL for the schema owner. Used only by migrate and create-operator-token."`
 	RuntimeRole      string `env:"FLEETWIRE_DATABASE_RUNTIME_ROLE" flag:"database-runtime-role" default:"fleetwire_app" help:"Role that migrate gives the row-level security policies and grants: the services' login role, or a group it belongs to (charmed_dml on Charmed PostgreSQL)."`
 	DBMaxConns       int32  `env:"FLEETWIRE_DATABASE_MAX_CONNS" flag:"database-max-conns" default:"20" help:"Connection pool size."`
@@ -34,7 +34,7 @@ type apiConfig struct {
 	DeviceAPIURL     string `env:"FLEETWIRE_DEVICE_API_URL" flag:"device-api-url" help:"Device listener URL sent to devices, used for renewal."`
 
 	KeyringDir         string `env:"FLEETWIRE_KEYRING_DIR" flag:"keyring-dir" help:"Directory of per-tenant KEK files."`
-	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs (mode 0400)."`
+	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600)."`
 
 	CRLFile     string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
 	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation."`
