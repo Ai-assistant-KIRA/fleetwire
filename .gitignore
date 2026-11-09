@@ -8,6 +8,8 @@
 /deploy/compose/secrets/
 /deploy/compose/.state/
 /deploy/compose/.env
+# Raw chaos-run artifacts (logs, results.jsonl); the tables are committed.
+/docs/results/raw/
 *.key
 *-key.pem
 
