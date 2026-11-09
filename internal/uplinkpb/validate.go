@@ -137,6 +137,12 @@ func validateReading(i int, r *fleetwirev1.Reading) error {
 	return nil
 }
 
+// ValidateReading applies the per-reading rules. The agent checks every
+// reading with it before writing it to the local log: one bad reading would
+// otherwise make ingest reject every batch that carries it, and the device
+// would resend that batch forever.
+func ValidateReading(r *fleetwirev1.Reading) error { return validateReading(0, r) }
+
 // LastSeq is the seq of the last reading. Call it only on a valid batch with
 // readings.
 func LastSeq(b *fleetwirev1.Batch) uint64 {
