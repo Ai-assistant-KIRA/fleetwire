@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/http/pprof" //nolint:gosec // G108: served only with -pprof, on the private metrics listener
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"strconv"
