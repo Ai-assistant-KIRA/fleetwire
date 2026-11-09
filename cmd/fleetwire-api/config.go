@@ -6,7 +6,7 @@ import (
 )
 
 // apiConfig is every setting of fleetwire-api. `fleetwire-api config-docs`
-// renders it into docs/reference/config-api.md.
+// renders it; `make docs-reference` puts it in docs/reference/configuration.md.
 type apiConfig struct {
 	cmd string
 
