@@ -12,8 +12,10 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -123,6 +125,32 @@ func waitFor(t *testing.T, what string, timeout time.Duration, ok func() bool) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// brokerHandshake opens a TLS connection to the broker's device listener
+// with cert and waits up to 2 s for the broker's verdict on it. With TLS 1.3
+// the server checks the client certificate after the client has finished
+// its side of the handshake, so a refusal arrives as an alert on the first
+// read. It returns nil when the broker kept the connection open.
+func brokerHandshake(ctx context.Context, cert tls.Certificate, roots *x509.CertPool) error {
+	d := tls.Dialer{Config: &tls.Config{RootCAs: roots, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
+	conn, err := d.DialContext(ctx, "tcp", strings.TrimPrefix(brokerURL, "tls://"))
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return err
+	}
+	_, err = conn.Read(make([]byte, 1))
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return nil
+	}
+	if err == nil {
+		return errors.New("the broker sent data before an MQTT CONNECT")
+	}
+	return err
 }
 
 func TestEndToEnd(t *testing.T) {
@@ -270,12 +298,40 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("export has %d lines, want %d", n, st.LastSeq)
 	}
 
+	// The device's own certificate, for handshakes of our own with the
+	// broker: accepted now, refused after the revoke.
+	deviceCert, err := tls.LoadX509KeyPair(filepath.Join(dir, "identity", "cert.pem"), filepath.Join(dir, "identity", "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(bundle) {
+		t.Fatal("CA bundle holds no certificates")
+	}
+	if err := brokerHandshake(t.Context(), deviceCert, roots); err != nil {
+		t.Fatalf("the broker refuses the device before the revoke: %v", err)
+	}
+
 	// Revoke: nothing more is stored, and the drop is audited.
 	c.do("POST", "/v1/devices/"+id+"/revoke", tok.Token, nil, 200, nil)
 	var audit []byte
 	c.do("GET", "/v1/audit?limit=100", tok.Token, nil, 200, &audit)
 	if !bytes.Contains(audit, []byte("device.revoke")) {
 		t.Fatalf("revocation not audited: %s", audit)
+	}
+	// The broker refuses the revoked certificate once Mosquitto has
+	// reloaded the CRL: the API publishes it at once, and the watcher in
+	// the Mosquitto container sends SIGHUP within a few seconds.
+	refused := time.Now().Add(30 * time.Second)
+	for {
+		err := brokerHandshake(t.Context(), deviceCert, roots)
+		if err != nil && strings.Contains(err.Error(), "revoked") {
+			break
+		}
+		if time.Now().After(refused) {
+			t.Fatalf("the broker still accepts the revoked certificate after 30 s (last handshake: %v)", err)
+		}
+		time.Sleep(time.Second)
 	}
 
 	// Destroy the tenant: its key is gone, so nothing of it can be read.
