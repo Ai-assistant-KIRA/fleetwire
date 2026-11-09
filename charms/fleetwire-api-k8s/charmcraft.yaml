@@ -1,0 +1,109 @@
+name: fleetwire-api-k8s
+type: charm
+title: fleetwire API
+summary: Tenant, operator and device API of fleetwire, with migrations, jobs and the CRL.
+description: |
+  Runs fleetwire-api in a Pebble-managed container. It relates to Charmed
+  PostgreSQL twice: `database` is the schema owner, used only to run the
+  migrations on the leader and to mint operator tokens; `runtime-database`
+  (extra user role charmed_dml) is the service's own login, which stays
+  inside row-level security. Ingest learns the keyring address, and that the
+  schema exists, over the fleetwire_ingest interface. Brokers fetch the
+  device CRL over the fleetwire_crl interface.
+
+  Certificates, CA keys and the keyring root key arrive in one Juju user
+  secret; set its ID in the pki-secret option. The local keyring keeps the
+  tenant KEKs on this unit's storage, so the application runs one unit.
+links:
+  source: https://github.com/Ai-assistant-KIRA/fleetwire
+  documentation: https://github.com/Ai-assistant-KIRA/fleetwire/blob/main/docs/how-to/deploy-with-juju.md
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  charm:
+    plugin: charm
+    source: .
+
+containers:
+  api:
+    resource: api-image
+    mounts:
+      - storage: data
+        location: /var/lib/fleetwire
+
+resources:
+  api-image:
+    type: oci-image
+    description: OCI image with fleetwire-api at /usr/local/bin/service.
+    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-api:0.1.0
+
+storage:
+  data:
+    type: filesystem
+    description: Tenant KEKs (keyring), the published CRL and export files.
+    minimum-size: 1G
+
+peers:
+  api-peers:
+    interface: fleetwire_api_peers
+
+requires:
+  # Schema owner: migrations and operator tokens only.
+  database:
+    interface: postgresql_client
+    limit: 1
+  # The service's login (extra user role charmed_dml).
+  runtime-database:
+    interface: postgresql_client
+    limit: 1
+
+provides:
+  ingest:
+    interface: fleetwire_ingest
+  crl:
+    interface: fleetwire_crl
+
+actions:
+  create-operator-token:
+    description: |
+      Create an operator token (fwo_...) and return it once. Operator tokens
+      create tenants; they are minted with the database owner's credentials,
+      so only the charm can make them.
+    params:
+      name:
+        type: string
+        description: A name for the token, shown in the audit log.
+    required: [name]
+
+config:
+  options:
+    pki-secret:
+      type: string
+      description: |
+        ID of a Juju user secret with the keys tls-cert, tls-key, ca-bundle,
+        device-trust, device-ca-cert, device-ca-key, service-trust and
+        keyring-root-key (PEM files; the root key as 64 hex characters).
+        Grant it to this application with juju grant-secret.
+    device-broker-url:
+      type: string
+      description: Broker URL handed to devices at enrollment, for example tls://broker.example.com:8883.
+    device-api-url:
+      type: string
+      description: |
+        URL of the device listener as devices reach it, for renewal. Default:
+        the Kubernetes service of this application, port 8444.
+    log-level:
+      type: string
+      default: info
+      description: debug, info, warn or error.
+    job-workers:
+      type: int
+      default: 2
+      description: Background jobs (retention, exports, purges) run in parallel.
+    rate-limit:
+      type: float
+      default: 20
+      description: API requests per second per token.

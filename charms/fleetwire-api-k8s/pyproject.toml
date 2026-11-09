@@ -1,0 +1,23 @@
+[project]
+name = "fleetwire-api-k8s"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["lib"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "C4", "N", "D", "I", "B", "UP", "S", "SIM", "RUF", "PT"]
+# D203/D213 conflict with D211/D212; tests carry their purpose in names.
+ignore = ["D203", "D213", "D105", "D107"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "D100", "D103", "S105", "S106"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
