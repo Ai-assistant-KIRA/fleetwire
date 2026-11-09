@@ -103,7 +103,7 @@ services:
     volumes: [kafka-3:/var/lib/kafka]
 
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
     networks: [fleetwire]
     user: "${FW_UID:-1883}:${FW_GID:-1883}"
