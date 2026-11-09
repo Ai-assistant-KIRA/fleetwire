@@ -5,6 +5,9 @@ deploy/compose/secrets
 deploy/compose/.state
 test/e2e/.state
 docs/_build
+# Raw chaos-run artifacts: hundreds of thousands of small files per run.
+docs/results/raw
+.cache
 charms
 **/*.snap
 **/__pycache__
