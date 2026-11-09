@@ -36,12 +36,16 @@ func (t *Tx) ReplaceDeviceRanges(ctx context.Context, deviceID uuid.UUID, ranges
 	if len(ranges) == 0 {
 		return nil
 	}
-	rows := make([][]any, len(ranges))
+	// COPY is faster but PostgreSQL refuses COPY FROM on tables with
+	// row-level security, so the rows go in as one INSERT from arrays.
+	los, his := make([]int64, len(ranges)), make([]int64, len(ranges))
 	for i, r := range ranges {
-		rows[i] = []any{t.tenant, deviceID, r.Lo, r.Hi}
+		los[i], his[i] = int64(r.Lo), int64(r.Hi)
 	}
-	if _, err := t.tx.CopyFrom(ctx, pgx.Identifier{"fleetwire", "device_ranges"},
-		[]string{"tenant_id", "device_id", "lo", "hi"}, pgx.CopyFromRows(rows)); err != nil {
+	if _, err := t.tx.Exec(ctx, `
+		INSERT INTO fleetwire.device_ranges (tenant_id, device_id, lo, hi)
+		SELECT $1, $2, lo, hi FROM unnest($3::bigint[], $4::bigint[]) AS r(lo, hi)`,
+		t.tenant, deviceID, los, his); err != nil {
 		return fmt.Errorf("insert device ranges: %w", err)
 	}
 	return nil
