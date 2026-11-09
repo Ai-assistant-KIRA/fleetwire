@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: fleetwire-api
+    static_configs: [{targets: ["api:9090"]}]
+  - job_name: fleetwire-bridge
+    static_configs: [{targets: ["bridge-1:9090", "bridge-2:9090"]}]
+  - job_name: fleetwire-ingest
+    static_configs: [{targets: ["ingest-1:9090", "ingest-2:9090"]}]
+  # The load generator runs on the host and serves metrics on the Compose
+  # network's gateway address.
+  - job_name: fleetwire-loadgen
+    static_configs: [{targets: ["172.31.250.1:9466"]}]
+  - job_name: prometheus
+    static_configs: [{targets: ["localhost:9090"]}]

@@ -63,6 +63,59 @@ build: ## Build every binary into bin/
 vuln: ## Scan dependencies for known vulnerabilities
 	govulncheck ./...
 
+# ---- Local stack ----------------------------------------------------------
+
+COMPOSE := docker compose -f deploy/compose/compose.yaml
+STATE   := deploy/compose/.state
+SECRETS := deploy/compose/secrets
+# Containers run as the user who starts the stack, so they can read the
+# dev secrets (0400) that dev-ca wrote for that user.
+export FW_UID := $(shell id -u)
+export FW_GID := $(shell id -g)
+
+.PHONY: dev-ca
+dev-ca: ## Create the development CA and certificates (idempotent, never overwrites)
+	$(GO) run ./scripts/dev-ca -out $(SECRETS) -hosts localhost,127.0.0.1,10.0.2.2,mosquitto,toxiproxy,api
+
+.PHONY: up
+up: dev-ca ## Build the images and start the development stack
+	mkdir -p $(STATE)/keyring $(STATE)/crl $(STATE)/exports $(STATE)/mosquitto
+	[ -f $(STATE)/crl/crl.pem ] || cp $(SECRETS)/crl.pem $(STATE)/crl/crl.pem
+	$(COMPOSE) up -d --build --wait --wait-timeout 300
+
+.PHONY: down
+down: ## Stop the stack and keep its data
+	$(COMPOSE) down
+
+.PHONY: reset
+reset: ## Stop the stack and delete all of its data (keeps the dev CA)
+	$(COMPOSE) down -v --remove-orphans
+	rm -rf $(STATE)
+
+.PHONY: ps
+ps: ## Show the stack's containers
+	$(COMPOSE) ps
+
+.PHONY: logs
+logs: ## Follow the logs of the fleetwire services
+	$(COMPOSE) logs -f api bridge-1 bridge-2 ingest-1 ingest-2
+
+.PHONY: operator-token
+operator-token: ## Print a new operator token (shown once)
+	@$(COMPOSE) run --rm --no-deps -T migrate create-operator-token -name "$${NAME:-operator-$$(date +%s)}"
+
+.PHONY: demo
+demo: build up ## Start the stack, enroll 5 agents, send data for 60 s, show where to look
+	./scripts/demo.sh
+
+.PHONY: demo-stop
+demo-stop: ## Stop the demo agents
+	./scripts/demo.sh stop
+
+.PHONY: e2e
+e2e: build up ## Run the end-to-end tests against the running stack
+	FLEETWIRE_E2E=1 $(GO) test -count=1 -timeout 15m ./test/e2e/...
+
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf bin dist

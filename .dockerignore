@@ -1,0 +1,10 @@
+.git
+bin
+dist
+deploy/compose/secrets
+deploy/compose/.state
+test/e2e/.state
+docs/_build
+charms
+**/*.snap
+**/__pycache__

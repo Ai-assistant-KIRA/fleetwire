@@ -6,6 +6,7 @@
 //	fleetwire-api migrate                        apply migrations (owner credentials)
 //	fleetwire-api create-operator-token -name N  print a new operator token once
 //	fleetwire-api config-docs                    print the configuration reference
+//	fleetwire-api healthcheck                    exit 0 when the local /readyz answers 200
 //	fleetwire-api version
 package main
 
@@ -35,6 +36,7 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/jobs"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/pki"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/svc"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/telemetry"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/tenantkey"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/tokens"
@@ -63,6 +65,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	case "version":
 		fmt.Fprintln(stdout, buildinfo.Get())
 		return nil
+	case "healthcheck":
+		addr := os.Getenv("FLEETWIRE_API_ADMIN_LISTEN")
+		if addr == "" {
+			addr = "127.0.0.1:9090"
+		}
+		return svc.Healthcheck(ctx, addr)
 	case "config-docs":
 		md, err := config.Markdown(cfg)
 		if err != nil {

@@ -1,0 +1,277 @@
+# fleetwire development stack. Start it with `make up` from the repository
+# root: that creates the dev PKI, the state directories and FW_UID/FW_GID.
+#
+# Every published port binds to 127.0.0.1. Devices reach the broker only
+# through Toxiproxy (port 18883), so the chaos runner can cut and degrade
+# that path; services use Mosquitto's internal service listener.
+name: fleetwire
+
+x-service: &service
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  # Runs as the user who ran `make up`, so the bind-mounted dev secrets
+  # (mode 0400, owned by that user) are readable.
+  user: "${FW_UID:-65532}:${FW_GID:-65532}"
+  restart: unless-stopped
+  networks: [fleetwire]
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/service", "healthcheck"]
+    interval: 5s
+    timeout: 5s
+    retries: 24
+    start_period: 10s
+
+x-env: &env
+  FLEETWIRE_LOG_LEVEL: ${FLEETWIRE_LOG_LEVEL:-info}
+  FLEETWIRE_ADMIN_LISTEN: ":9090"
+  FLEETWIRE_OTLP_ENDPOINT: http://jaeger:4318
+  FLEETWIRE_TRACE_SAMPLE_RATIO: "0.1"
+
+x-kafka-env: &kafka-env
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+  KAFKA_DEFAULT_REPLICATION_FACTOR: 3
+  KAFKA_MIN_INSYNC_REPLICAS: 2
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 3
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 2
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+  KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
+
+x-kafka: &kafka
+  image: apache/kafka:4.1.0
+  restart: unless-stopped
+  networks: [fleetwire]
+  healthcheck:
+    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+    interval: 10s
+    timeout: 10s
+    retries: 12
+    start_period: 20s
+
+x-mqtt-env: &mqtt-env
+  FLEETWIRE_MQTT_URL: tls://mosquitto:8884
+  FLEETWIRE_MQTT_CA_FILE: /secrets/ca-bundle.pem
+  FLEETWIRE_KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [fleetwire]
+    environment:
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=512MB", "-c", "synchronous_commit=on"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-fleetwire.sql:ro
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fleetwire"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kafka-1:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 1
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092
+    volumes: [kafka-1:/var/lib/kafka]
+  kafka-2:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 2
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092
+    volumes: [kafka-2:/var/lib/kafka]
+  kafka-3:
+    <<: *kafka
+    environment:
+      <<: *kafka-env
+      KAFKA_NODE_ID: 3
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092
+    volumes: [kafka-3:/var/lib/kafka]
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    networks: [fleetwire]
+    user: "${FW_UID:-1883}:${FW_GID:-1883}"
+    entrypoint: ["/bin/sh", "/etc/fleetwire/start.sh"]
+    ulimits:
+      nofile: {soft: 1048576, hard: 1048576}
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/acl:/mosquitto/config/acl:ro
+      - ./mosquitto/start.sh:/etc/fleetwire/start.sh:ro
+      - ./secrets:/secrets:ro
+      - ./.state/crl:/crl:ro
+      - ./.state/mosquitto:/mosquitto/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 8883 && nc -z localhost 8884"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    restart: unless-stopped
+    networks: [fleetwire]
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: [./toxiproxy.json:/config/toxiproxy.json:ro]
+    ports: ["127.0.0.1:18883:18883", "127.0.0.1:8474:8474"]
+    depends_on:
+      mosquitto: {condition: service_healthy}
+
+  migrate:
+    <<: *service
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api}}
+    restart: "no"
+    healthcheck: {disable: true}
+    command: ["migrate"]
+    environment:
+      FLEETWIRE_DATABASE_OWNER_URL: postgres://fleetwire_owner:owner@postgres:5432/fleetwire?sslmode=disable
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  topics:
+    <<: *service
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest}}
+    restart: "no"
+    healthcheck: {disable: true}
+    command: ["ensure-topics"]
+    environment:
+      <<: [*env, *mqtt-env]
+    depends_on:
+      kafka-1: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+
+  api:
+    <<: *service
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api}}
+    command: ["serve"]
+    environment:
+      <<: *env
+      FLEETWIRE_DATABASE_URL: postgres://fleetwire_app:app@postgres:5432/fleetwire?sslmode=disable
+      FLEETWIRE_API_PUBLIC_LISTEN: ":8443"
+      FLEETWIRE_API_DEVICE_LISTEN: ":8444"
+      FLEETWIRE_API_ADMIN_LISTEN: ":9090"
+      FLEETWIRE_API_TLS_CERT_FILE: /secrets/api.pem
+      FLEETWIRE_API_TLS_KEY_FILE: /secrets/api.key
+      FLEETWIRE_DEVICE_TRUST_FILE: /secrets/device-trust.pem
+      FLEETWIRE_DEVICE_CA_CERT_FILE: /secrets/device-ca.pem
+      FLEETWIRE_DEVICE_CA_KEY_FILE: /secrets/device-ca.key
+      FLEETWIRE_CA_BUNDLE_FILE: /secrets/ca-bundle.pem
+      FLEETWIRE_DEVICE_BROKER_URL: ${FLEETWIRE_DEVICE_BROKER_URL:-tls://localhost:18883}
+      FLEETWIRE_DEVICE_API_URL: ${FLEETWIRE_DEVICE_API_URL:-https://localhost:8444}
+      FLEETWIRE_KEYRING_DIR: /state/keyring
+      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /secrets/keyring-root.key
+      FLEETWIRE_CRL_FILE: /state/crl/crl.pem
+      FLEETWIRE_EXPORT_DIR: /state/exports
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./.state/keyring:/state/keyring
+      - ./.state/crl:/state/crl
+      - ./.state/exports:/state/exports
+    ports: ["127.0.0.1:8443:8443", "127.0.0.1:8444:8444", "127.0.0.1:9100:9090"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+
+  bridge-1: &bridge
+    <<: *service
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-bridge}}
+    hostname: bridge-1
+    environment: &bridge-env
+      <<: [*env, *mqtt-env]
+      FLEETWIRE_MQTT_CERT_FILE: /secrets/bridge.pem
+      FLEETWIRE_MQTT_KEY_FILE: /secrets/bridge.key
+    volumes: [./secrets:/secrets:ro]
+    ports: ["127.0.0.1:9101:9090"]
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      mosquitto: {condition: service_healthy}
+  bridge-2:
+    <<: *bridge
+    hostname: bridge-2
+    ports: ["127.0.0.1:9102:9090"]
+
+  ingest-1: &ingest
+    <<: *service
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest}}
+    hostname: ingest-1
+    command: ["run"]
+    environment:
+      <<: [*env, *mqtt-env]
+      FLEETWIRE_DATABASE_URL: postgres://fleetwire_app:app@postgres:5432/fleetwire?sslmode=disable
+      FLEETWIRE_MQTT_CERT_FILE: /secrets/ingest.pem
+      FLEETWIRE_MQTT_KEY_FILE: /secrets/ingest.key
+      FLEETWIRE_KEYRING_DIR: /state/keyring
+      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /secrets/keyring-root.key
+    volumes:
+      - ./secrets:/secrets:ro
+      - ./.state/keyring:/state/keyring:ro
+    ports: ["127.0.0.1:9111:9090"]
+    depends_on:
+      topics: {condition: service_completed_successfully}
+      migrate: {condition: service_completed_successfully}
+      mosquitto: {condition: service_healthy}
+  ingest-2:
+    <<: *ingest
+    hostname: ingest-2
+    ports: ["127.0.0.1:9112:9090"]
+
+  prometheus:
+    image: prom/prometheus:v3.7.3
+    restart: unless-stopped
+    networks: [fleetwire]
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d", "--web.enable-lifecycle"]
+    volumes:
+      - ../prometheus:/etc/prometheus:ro
+      - prometheus:/prometheus
+    ports: ["127.0.0.1:9090:9090"]
+
+  grafana:
+    image: grafana/grafana:12.2.1
+    restart: unless-stopped
+    networks: [fleetwire]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ../grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["127.0.0.1:3000:3000"]
+
+  jaeger:
+    image: jaegertracing/jaeger:2.11.0
+    restart: unless-stopped
+    networks: [fleetwire]
+    ports: ["127.0.0.1:16686:16686"]
+
+networks:
+  fleetwire:
+    # A fixed subnet so the load generator on the host can serve metrics on
+    # the gateway address, reachable by Prometheus but not from outside.
+    ipam:
+      config:
+        - subnet: 172.31.250.0/24
+          gateway: 172.31.250.1
+
+volumes:
+  pgdata:
+  kafka-1:
+  kafka-2:
+  kafka-3:
+  prometheus:

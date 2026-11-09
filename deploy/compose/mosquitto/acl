@@ -1,0 +1,11 @@
+# Devices: the username is the certificate CN, which the API sets to the
+# server-generated device UUID (ADR-0009). A device can only publish its own
+# uplink and read its own acks.
+pattern write fw/v1/d/%u/up
+pattern read fw/v1/d/%u/ack
+
+user fleetwire-bridge
+topic read fw/v1/d/+/up
+
+user fleetwire-ingest
+topic write fw/v1/d/+/ack
