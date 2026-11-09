@@ -317,10 +317,19 @@ func (l *Log) recover() (Recovery, error) {
 	return rec, nil
 }
 
-// addGap adds g to the pending gaps, merging ranges with the same reason.
+// addGap adds g to the pending gaps and the gap history.
 func (l *Log) addGap(g Gap) {
-	l.state.PendingGaps = append(l.state.PendingGaps, g)
-	slices.SortFunc(l.state.PendingGaps, func(a, b Gap) int {
+	l.state.PendingGaps = mergeGaps(append(l.state.PendingGaps, g))
+	h := mergeGaps(append(l.state.GapHistory, g))
+	if len(h) > maxGapHistory {
+		h = h[len(h)-maxGapHistory:]
+	}
+	l.state.GapHistory = h
+}
+
+// mergeGaps sorts gaps and merges touching ranges with the same reason.
+func mergeGaps(gaps []Gap) []Gap {
+	slices.SortFunc(gaps, func(a, b Gap) int {
 		switch {
 		case a.From < b.From:
 			return -1
@@ -330,8 +339,8 @@ func (l *Log) addGap(g Gap) {
 			return 0
 		}
 	})
-	merged := l.state.PendingGaps[:1]
-	for _, g := range l.state.PendingGaps[1:] {
+	merged := gaps[:1]
+	for _, g := range gaps[1:] {
 		p := &merged[len(merged)-1]
 		if g.Reason == p.Reason && g.From <= p.To+1 {
 			p.To = max(p.To, g.To)
@@ -339,7 +348,53 @@ func (l *Log) addGap(g Gap) {
 		}
 		merged = append(merged, g)
 	}
-	l.state.PendingGaps = merged
+	return merged
+}
+
+// GapHistory returns every gap this log ever reported.
+func (l *Log) GapHistory() []Gap {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.state.GapHistory)
+}
+
+// Inspection is a read-only view of a log directory.
+type Inspection struct {
+	State    State
+	LastSeq  uint64 // last valid record on disk (0 if none)
+	Segments int
+	Bytes    int64
+}
+
+// Inspect reads a log directory without changing it, so it is safe while
+// the agent is stopped and repairs nothing. A torn tail is simply not
+// counted. It must not run while another process has the log open for
+// writing, because that process may be mid-append.
+func Inspect(dir string) (Inspection, error) {
+	st, err := LoadState(dir)
+	if err != nil {
+		return Inspection{}, err
+	}
+	segs, err := listSegments(dir)
+	if err != nil {
+		return Inspection{}, err
+	}
+	in := Inspection{State: st}
+	for i, s := range segs {
+		var limit uint64
+		if i+1 < len(segs) {
+			limit = segs[i+1].first
+		}
+		if _, err := s.scan(limit); err != nil {
+			return Inspection{}, err
+		}
+		in.Segments++
+		in.Bytes += s.size
+		if s.count > 0 {
+			in.LastSeq = max(in.LastSeq, s.last())
+		}
+	}
+	return in, nil
 }
 
 // Append writes payload as the record with the next seq and returns the seq.

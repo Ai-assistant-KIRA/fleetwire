@@ -41,24 +41,36 @@ type State struct {
 	// being reused if the segment files are lost while this file survives.
 	MaxSeqEver  uint64 `json:"max_seq_ever"`
 	PendingGaps []Gap  `json:"pending_gaps"`
+	// GapHistory is every gap this device ever reported, merged. The checker
+	// uses it to verify that each reported gap reached the server.
+	GapHistory []Gap `json:"gap_history,omitempty"`
 }
+
+// maxGapHistory bounds state.json. Gaps merge when adjacent, so even a long
+// outage with repeated disk-budget drops produces one entry.
+const maxGapHistory = 1000
 
 func (s State) clone() State {
 	s.PendingGaps = append([]Gap(nil), s.PendingGaps...)
+	s.GapHistory = append([]Gap(nil), s.GapHistory...)
 	return s
 }
 
-func (s State) equal(o State) bool {
-	if s.Version != o.Version || s.DeviceID != o.DeviceID || s.Acked != o.Acked ||
-		s.MaxSeqEver != o.MaxSeqEver || len(s.PendingGaps) != len(o.PendingGaps) {
+func gapsEqual(a, b []Gap) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for i := range s.PendingGaps {
-		if s.PendingGaps[i] != o.PendingGaps[i] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}
 	return true
+}
+
+func (s State) equal(o State) bool {
+	return s.Version == o.Version && s.DeviceID == o.DeviceID && s.Acked == o.Acked &&
+		s.MaxSeqEver == o.MaxSeqEver && gapsEqual(s.PendingGaps, o.PendingGaps) && gapsEqual(s.GapHistory, o.GapHistory)
 }
 
 // ErrCorruptState means state.json exists but cannot be parsed. Starting

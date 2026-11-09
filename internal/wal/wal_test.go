@@ -299,6 +299,47 @@ func TestDiskBudgetDropsOldestAsGap(t *testing.T) {
 	if got := l.PendingGaps(); !slices.Equal(got, gaps) {
 		t.Fatalf("gaps after restart = %v, want %v", got, gaps)
 	}
+	// An ack past the gap clears it from the pending list, but the history
+	// keeps it for the checker.
+	l.Ack(gaps[0].To + 5)
+	if err := l.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if len(l.PendingGaps()) != 0 || !slices.Equal(l.GapHistory(), gaps) {
+		t.Fatalf("pending %v, history %v; want none pending and %v in history", l.PendingGaps(), l.GapHistory(), gaps)
+	}
+}
+
+func TestInspectIsReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	l, _ := open(t, Options{Dir: dir, Sync: SyncAlways, SegmentSize: 256})
+	appendN(t, l, 40)
+	l.Ack(7)
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
+	segs, _ := listSegments(dir)
+	last := segs[len(segs)-1].path
+	f, err := os.OpenFile(last, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write([]byte{1, 2, 3}); err != nil { // a torn record
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	before, _ := os.ReadFile(last)
+	in, err := Inspect(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.LastSeq != 40 || in.State.Acked != 7 || in.Segments != len(segs) {
+		t.Fatalf("Inspect = %+v", in)
+	}
+	after, _ := os.ReadFile(last)
+	if !bytes.Equal(before, after) {
+		t.Fatal("Inspect changed the segment file")
+	}
 }
 
 // TestCheckpointDeletesOnlyPersistedAcked is P4.
