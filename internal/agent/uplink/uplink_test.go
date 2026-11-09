@@ -123,7 +123,9 @@ func start(t *testing.T, cfg Config, walOpts wal.Options) *rig {
 	return r
 }
 
-var base = Config{BatchSize: 10, BatchWait: time.Second, MaxInflight: 30, AckTimeout: 30 * time.Second, AgentVersion: "test"}
+// The tests turn the jitter off so timeouts land on exact seconds.
+var base = Config{BatchSize: 10, BatchWait: time.Second, MaxInflight: 30, AckTimeout: 30 * time.Second, AgentVersion: "test",
+	Rand: func() float64 { return 0 }}
 
 func TestBatchesWindowAndAcks(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -205,6 +207,49 @@ func TestAckTimeoutResendsFromAcked(t *testing.T) {
 		}
 		if v := testutil.ToFloat64(r.m.Resends); v != 1 {
 			t.Fatalf("resends = %v", v)
+		}
+	})
+}
+
+// A backend that is slow, not lossy, must not get a full resend from every
+// device every AckTimeout: the wait doubles until an ack shows progress.
+func TestAckTimeoutBacksOffUntilAnAckArrives(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := base
+		cfg.AckTimeout = 10 * time.Second // the cap is 80 s
+		r := start(t, cfg, wal.Options{})
+		defer r.stop()
+		r.up.Connected()
+		fill(t, r.log, 5)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := seqRanges(r.pub.take()); len(got) != 1 {
+			t.Fatalf("first send: %v", got)
+		}
+		resends := func(n int) []time.Duration {
+			var gaps []time.Duration
+			last := time.Now()
+			for len(gaps) < n {
+				time.Sleep(time.Second)
+				synctest.Wait()
+				if len(r.pub.take()) > 0 {
+					gaps = append(gaps, time.Since(last))
+					last = time.Now()
+				}
+			}
+			return gaps
+		}
+		// The loop checks once a second, so each resend comes up to 1 s late.
+		for i, seconds := range []int{10, 20, 40, 80, 80} {
+			got, want := resends(1)[0], time.Duration(seconds)*time.Second
+			if got < want || got > want+2*time.Second {
+				t.Fatalf("resend %d came after %v, want about %v", i+1, got, want)
+			}
+		}
+		ack(t, r.up, 3)
+		synctest.Wait()
+		if got := resends(1)[0]; got > 12*time.Second {
+			t.Fatalf("after progress the timeout should be 10 s again; the resend took %v", got)
 		}
 	})
 }

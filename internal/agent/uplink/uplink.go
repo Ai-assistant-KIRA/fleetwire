@@ -5,13 +5,15 @@
 // again right after the acked seq. Ingest stores out-of-order and repeated
 // ranges correctly, so resending a stored range costs only bandwidth, and
 // the device logic stays small enough to check by reading it. The in-flight
-// window bounds that cost.
+// window bounds that cost, and the ack timeout backs off so that a slow
+// backend is not answered with more load.
 package uplink
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -37,10 +39,20 @@ var ErrNotConnected = errors.New("uplink: not connected")
 
 // Config tunes the uplink.
 type Config struct {
-	BatchSize    int
-	BatchWait    time.Duration
-	MaxInflight  int
-	AckTimeout   time.Duration
+	BatchSize   int
+	BatchWait   time.Duration
+	MaxInflight int
+	// AckTimeout is the first wait for an end-to-end ack before resending
+	// from the acked seq. Each timeout without progress doubles it, up to
+	// AckTimeoutMax (default 8 x AckTimeout), plus up to 25% at random, and
+	// an ack that moves the acked seq resets it. Without the backoff, a
+	// backend slower than the timeout makes every device resend its whole
+	// window, which slows the backend further: at 10,000 devices that turned
+	// a one-minute network cut into ten times the normal load.
+	AckTimeout    time.Duration
+	AckTimeoutMax time.Duration
+	// Rand returns a number in [0, 1) for the jitter (default math/rand).
+	Rand         func() float64
 	AgentVersion string
 	// CheckpointEvery coalesces state writes after acks (default 250 ms).
 	CheckpointEvery time.Duration
@@ -107,7 +119,13 @@ type Uplink struct {
 	checkpointDue  bool
 	lastCheckpoint time.Time
 	unackedShown   int64
+	ackTimeout     time.Duration // current, after backoff
+	jitter         float64       // fraction of ackTimeout added, re-drawn per timeout
 }
+
+// maxJitter spreads the resends of devices that lost their connection at
+// the same moment, so they do not all time out together again.
+const maxJitter = 0.25
 
 // New returns an uplink for log, publishing through pub.
 func New(cfg Config, log *wal.Log, pub Publisher, m *Metrics, lg *slog.Logger) *Uplink {
@@ -117,7 +135,19 @@ func New(cfg Config, log *wal.Log, pub Publisher, m *Metrics, lg *slog.Logger) *
 	if cfg.PublishTimeout <= 0 {
 		cfg.PublishTimeout = 30 * time.Second
 	}
-	return &Uplink{cfg: cfg, log: log, pub: pub, m: m, lg: lg, wake: make(chan struct{}, 1)}
+	if cfg.AckTimeoutMax < cfg.AckTimeout {
+		cfg.AckTimeoutMax = 8 * cfg.AckTimeout
+	}
+	if cfg.Rand == nil {
+		cfg.Rand = rand.Float64
+	}
+	return &Uplink{cfg: cfg, log: log, pub: pub, m: m, lg: lg, wake: make(chan struct{}, 1),
+		ackTimeout: cfg.AckTimeout, jitter: cfg.Rand() * maxJitter}
+}
+
+// timeout is how long the oldest unacknowledged batch may wait.
+func (u *Uplink) timeout() time.Duration {
+	return u.ackTimeout + time.Duration(u.jitter*float64(u.ackTimeout))
 }
 
 func (u *Uplink) poke() {
@@ -226,9 +256,15 @@ func (u *Uplink) step(ctx context.Context) {
 		u.restart()
 	}
 	u.applyAck()
-	if len(u.inflight) > 0 && now.Sub(u.inflight[0].sentAt) > u.cfg.AckTimeout {
-		u.lg.Debug("ack timeout; resending from the acked seq", "acked", u.log.Acked(), "oldest_sent", u.inflight[0].first)
+	if len(u.inflight) > 0 && now.Sub(u.inflight[0].sentAt) > u.timeout() {
+		u.lg.Debug("ack timeout; resending from the acked seq", "acked", u.log.Acked(), "oldest_sent", u.inflight[0].first,
+			"timeout", u.timeout())
 		u.m.Resends.Inc()
+		// A missing ack means a lost message or a slow backend. Waiting
+		// twice as long before the next full resend costs little in the
+		// first case and keeps the second from getting worse.
+		u.ackTimeout = min(2*u.ackTimeout, u.cfg.AckTimeoutMax)
+		u.jitter = u.cfg.Rand() * maxJitter
 		u.restart()
 	}
 	if u.checkpointDue && now.Sub(u.lastCheckpoint) >= u.cfg.CheckpointEvery {
@@ -254,6 +290,7 @@ func (u *Uplink) applyAck() {
 	if !res.Advanced {
 		return
 	}
+	u.ackTimeout = u.cfg.AckTimeout
 	u.m.ReadingsAcked.Add(float64(n - before))
 	i := 0
 	for i < len(u.inflight) && u.inflight[i].last <= n {
@@ -321,7 +358,7 @@ func (u *Uplink) send(ctx context.Context) {
 		pending := u.log.PendingGaps()
 		// Gaps are resent when new ones appear, and again after an ack
 		// timeout if the server has not covered them yet.
-		sendGaps := len(pending) > 0 && (!gapsCovered(pending, u.gapsSent) || now.Sub(u.gapsSentAt) > u.cfg.AckTimeout)
+		sendGaps := len(pending) > 0 && (!gapsCovered(pending, u.gapsSent) || now.Sub(u.gapsSentAt) > u.timeout())
 		if avail == 0 {
 			u.pendingSince = time.Time{}
 		} else if u.pendingSince.IsZero() {
