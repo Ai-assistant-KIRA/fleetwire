@@ -1,0 +1,59 @@
+name: fleetwire-bridge-k8s
+type: charm
+title: fleetwire bridge
+summary: Moves device batches from Mosquitto to Kafka and acknowledges them only after Kafka has them.
+description: |
+  Runs fleetwire-bridge in a Pebble-managed container. Units share one MQTT
+  shared subscription, so scaling out spreads the load. Kafka comes from
+  Charmed Kafka over kafka_client (producer on the uplink topic); the broker
+  address comes from mosquitto-k8s over fleetwire_mqtt.
+
+  The service certificate (CN fleetwire-bridge) arrives in a Juju user
+  secret; set its ID in the pki-secret option.
+links:
+  source: https://github.com/Ai-assistant-KIRA/fleetwire
+  documentation: https://github.com/Ai-assistant-KIRA/fleetwire/blob/main/docs/how-to/deploy-with-juju.md
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  charm:
+    plugin: charm
+    source: .
+
+containers:
+  bridge:
+    resource: bridge-image
+
+resources:
+  bridge-image:
+    type: oci-image
+    description: OCI image with fleetwire-bridge at /usr/local/bin/service.
+    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-bridge:0.1.0
+
+requires:
+  kafka:
+    interface: kafka_client
+    limit: 1
+  mqtt:
+    interface: fleetwire_mqtt
+    limit: 1
+
+config:
+  options:
+    pki-secret:
+      type: string
+      description: |
+        ID of a Juju user secret with the keys tls-cert and tls-key (the
+        fleetwire-bridge service certificate) and ca-bundle (the CA that
+        signed the broker certificate).
+    receive-maximum:
+      type: int
+      default: 1000
+      description: Messages the broker may send before the bridge acknowledges (1 to 65535).
+    log-level:
+      type: string
+      default: info
+      description: debug, info, warn or error.
