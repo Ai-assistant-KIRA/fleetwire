@@ -42,13 +42,18 @@ type Config struct {
 	BatchSize   int
 	BatchWait   time.Duration
 	MaxInflight int
-	// AckTimeout is the first wait for an end-to-end ack before resending
-	// from the acked seq. Each timeout without progress doubles it, up to
-	// AckTimeoutMax (default 8 x AckTimeout), plus up to 25% at random, and
-	// an ack that moves the acked seq resets it. Without the backoff, a
-	// backend slower than the timeout makes every device resend its whole
-	// window, which slows the backend further: at 10,000 devices that turned
-	// a one-minute network cut into ten times the normal load.
+	// AckTimeout is the shortest wait for an end-to-end ack before
+	// resending from the acked seq, and the wait before the first ack
+	// delay is measured. The wait is a retransmission timeout as in TCP
+	// (RFC 6298): it follows the smoothed ack delay of batches that were
+	// sent once (srtt + 4 x rttvar), doubles after each timeout, stays
+	// between AckTimeout and AckTimeoutMax (default 8 x AckTimeout), and
+	// gets up to 25% added at random. Acks of resent batches do not shrink
+	// it (Karn's algorithm), because they cannot tell which copy arrived.
+	//
+	// A fixed timeout made a slow backend collapse: at 10,000 devices the
+	// ack delay grew past it, every device resent its whole window again
+	// and again, and devices sent 12 times the readings they collected.
 	AckTimeout    time.Duration
 	AckTimeoutMax time.Duration
 	// Rand returns a number in [0, 1) for the jitter (default math/rand).
@@ -90,6 +95,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 type span struct {
 	first, last uint64
 	sentAt      time.Time
+	// resent marks a span that repeats seqs published before. Its ack may
+	// answer an earlier copy, so it gives no delay sample.
+	resent bool
 }
 
 // Uplink is one device's sender.
@@ -119,9 +127,20 @@ type Uplink struct {
 	checkpointDue  bool
 	lastCheckpoint time.Time
 	unackedShown   int64
-	ackTimeout     time.Duration // current, after backoff
-	jitter         float64       // fraction of ackTimeout added, re-drawn per timeout
+	// highestSent is the highest seq that may have been published: the
+	// highest one sent by this process, or the end of the log at start,
+	// since a previous run may have sent those.
+	highestSent uint64
+	// The retransmission timeout (see Config.AckTimeout).
+	rto          time.Duration
+	srtt, rttvar time.Duration
+	haveRTT      bool
+	jitter       float64 // fraction of rto added, re-drawn per timeout
 }
+
+// rttGranularity is the clock granularity term of RFC 6298: the loop
+// checks for timeouts once a second.
+const rttGranularity = time.Second
 
 // maxJitter spreads the resends of devices that lost their connection at
 // the same moment, so they do not all time out together again.
@@ -142,12 +161,28 @@ func New(cfg Config, log *wal.Log, pub Publisher, m *Metrics, lg *slog.Logger) *
 		cfg.Rand = rand.Float64
 	}
 	return &Uplink{cfg: cfg, log: log, pub: pub, m: m, lg: lg, wake: make(chan struct{}, 1),
-		ackTimeout: cfg.AckTimeout, jitter: cfg.Rand() * maxJitter}
+		rto: cfg.AckTimeout, jitter: cfg.Rand() * maxJitter}
 }
 
 // timeout is how long the oldest unacknowledged batch may wait.
 func (u *Uplink) timeout() time.Duration {
-	return u.ackTimeout + time.Duration(u.jitter*float64(u.ackTimeout))
+	return u.rto + time.Duration(u.jitter*float64(u.rto))
+}
+
+// sampleRTT folds one ack delay into the estimate and recomputes the
+// timeout (RFC 6298, section 2).
+func (u *Uplink) sampleRTT(r time.Duration) {
+	if !u.haveRTT {
+		u.srtt, u.rttvar, u.haveRTT = r, r/2, true
+	} else {
+		d := u.srtt - r
+		if d < 0 {
+			d = -d
+		}
+		u.rttvar = (3*u.rttvar + d) / 4
+		u.srtt = (7*u.srtt + r) / 8
+	}
+	u.rto = min(max(u.srtt+max(rttGranularity, 4*u.rttvar), u.cfg.AckTimeout), u.cfg.AckTimeoutMax)
 }
 
 func (u *Uplink) poke() {
@@ -202,6 +237,7 @@ func (u *Uplink) HandleAck(payload []byte) error {
 // Run sends until ctx ends, then persists the latest ack.
 func (u *Uplink) Run(ctx context.Context) error {
 	u.nextToSend = u.log.Acked() + 1
+	u.highestSent = u.log.Next() - 1
 	u.seenGen = u.conn.Load() >> 1
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
@@ -263,7 +299,7 @@ func (u *Uplink) step(ctx context.Context) {
 		// A missing ack means a lost message or a slow backend. Waiting
 		// twice as long before the next full resend costs little in the
 		// first case and keeps the second from getting worse.
-		u.ackTimeout = min(2*u.ackTimeout, u.cfg.AckTimeoutMax)
+		u.rto = min(2*u.rto, u.cfg.AckTimeoutMax)
 		u.jitter = u.cfg.Rand() * maxJitter
 		u.restart()
 	}
@@ -290,11 +326,19 @@ func (u *Uplink) applyAck() {
 	if !res.Advanced {
 		return
 	}
-	u.ackTimeout = u.cfg.AckTimeout
 	u.m.ReadingsAcked.Add(float64(n - before))
 	i := 0
 	for i < len(u.inflight) && u.inflight[i].last <= n {
 		i++
+	}
+	// One sample per ack, from the newest span it completes that was sent
+	// only once. Progress alone does not shrink the timeout: when only
+	// resent spans are acked, the backend may still be as slow as before.
+	for j := i - 1; j >= 0; j-- {
+		if !u.inflight[j].resent {
+			u.sampleRTT(time.Since(u.inflight[j].sentAt))
+			break
+		}
 	}
 	u.inflight = u.inflight[i:]
 	if u.nextToSend <= n {
@@ -410,7 +454,8 @@ func (u *Uplink) send(ctx context.Context) {
 		}
 		if len(recs) > 0 {
 			first, last := recs[0].Seq, recs[len(recs)-1].Seq
-			u.inflight = append(u.inflight, span{first: first, last: last, sentAt: now})
+			u.inflight = append(u.inflight, span{first: first, last: last, sentAt: now, resent: first <= u.highestSent})
+			u.highestSent = max(u.highestSent, last)
 			u.nextToSend = last + 1
 			u.m.ReadingsSent.Add(float64(len(recs)))
 		}

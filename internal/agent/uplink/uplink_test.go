@@ -212,8 +212,10 @@ func TestAckTimeoutResendsFromAcked(t *testing.T) {
 }
 
 // A backend that is slow, not lossy, must not get a full resend from every
-// device every AckTimeout: the wait doubles until an ack shows progress.
-func TestAckTimeoutBacksOffUntilAnAckArrives(t *testing.T) {
+// device every AckTimeout: the wait doubles after each timeout, and an ack
+// of resent data does not shrink it again (Karn's algorithm). Only the ack
+// of a batch that was sent once does.
+func TestAckTimeoutBacksOffUntilAFreshAck(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		cfg := base
 		cfg.AckTimeout = 10 * time.Second // the cap is 80 s
@@ -226,30 +228,151 @@ func TestAckTimeoutBacksOffUntilAnAckArrives(t *testing.T) {
 		if got := seqRanges(r.pub.take()); len(got) != 1 {
 			t.Fatalf("first send: %v", got)
 		}
-		resends := func(n int) []time.Duration {
-			var gaps []time.Duration
-			last := time.Now()
-			for len(gaps) < n {
+		// nextSend waits for the next publish and returns how long it took.
+		nextSend := func() time.Duration {
+			from := time.Now()
+			for {
 				time.Sleep(time.Second)
 				synctest.Wait()
 				if len(r.pub.take()) > 0 {
-					gaps = append(gaps, time.Since(last))
-					last = time.Now()
+					return time.Since(from)
 				}
 			}
-			return gaps
 		}
 		// The loop checks once a second, so each resend comes up to 1 s late.
 		for i, seconds := range []int{10, 20, 40, 80, 80} {
-			got, want := resends(1)[0], time.Duration(seconds)*time.Second
+			got, want := nextSend(), time.Duration(seconds)*time.Second
 			if got < want || got > want+2*time.Second {
 				t.Fatalf("resend %d came after %v, want about %v", i+1, got, want)
 			}
 		}
+		// Progress on resent data says nothing about how slow the backend
+		// is now.
 		ack(t, r.up, 3)
 		synctest.Wait()
-		if got := resends(1)[0]; got > 12*time.Second {
-			t.Fatalf("after progress the timeout should be 10 s again; the resend took %v", got)
+		if got := nextSend(); got < 80*time.Second {
+			t.Fatalf("an ack of resent data shrank the timeout: the resend came after %v, want 80 s", got)
+		}
+		// New readings, sent once and acked 2 s later: a real sample, and
+		// the timeout goes back to its floor.
+		ack(t, r.up, 5)
+		fill(t, r.log, 5)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if got := seqRanges(r.pub.take()); len(got) != 1 || got[0] != [2]uint64{6, 10} {
+			t.Fatalf("new readings: %v", got)
+		}
+		time.Sleep(2 * time.Second)
+		ack(t, r.up, 10)
+		synctest.Wait()
+		fill(t, r.log, 5)
+		time.Sleep(time.Second)
+		synctest.Wait()
+		r.pub.take()
+		if got := nextSend(); got > 12*time.Second {
+			t.Fatalf("after a 2 s ack the timeout should be the 10 s floor; the resend came after %v", got)
+		}
+	})
+}
+
+// slowBackend stores what is published after a delay, never twice, and
+// acks the contiguous prefix, like ingest behind a growing Kafka lag.
+type slowBackend struct {
+	delay  time.Duration
+	drop   int // lose this many batches, as a lossy network would
+	due    []dueBatch
+	stored map[uint64]bool
+	acked  uint64
+}
+
+type dueBatch struct {
+	at          time.Time
+	first, last uint64
+}
+
+// tick takes what the device published, stores what is due, and acks.
+func (b *slowBackend) tick(t *testing.T, r *rig) {
+	t.Helper()
+	now := time.Now()
+	for _, batch := range r.pub.take() {
+		if len(batch.GetReadings()) == 0 {
+			continue
+		}
+		if b.drop > 0 {
+			b.drop--
+			continue
+		}
+		b.due = append(b.due, dueBatch{at: now.Add(b.delay), first: batch.GetFirstSeq(), last: uplinkpb.LastSeq(batch)})
+	}
+	kept := b.due[:0]
+	for _, d := range b.due {
+		if d.at.After(now) {
+			kept = append(kept, d)
+			continue
+		}
+		for s := d.first; s <= d.last; s++ {
+			b.stored[s] = true
+		}
+	}
+	b.due = kept
+	before := b.acked
+	for b.stored[b.acked+1] {
+		b.acked++
+	}
+	if b.acked > before {
+		ack(t, r.up, b.acked)
+	}
+}
+
+// With a fixed timeout, a backend whose ack delay grows past it gets every
+// device's window again and again (the 10,000-device collapse). The
+// timeout must follow the measured delay, so a slow but lossless backend
+// gets each reading once, and shrink again when the backend is fast, so a
+// lost batch is still resent soon.
+func TestAckTimeoutFollowsTheAckDelay(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		cfg := base
+		cfg.AckTimeout = 10 * time.Second
+		cfg.AckTimeoutMax = 120 * time.Second
+		cfg.MaxInflight = 1000
+		r := start(t, cfg, wal.Options{})
+		defer r.stop()
+		r.up.Connected()
+		b := &slowBackend{delay: 25 * time.Second, stored: map[uint64]bool{}}
+		run := func(seconds int) {
+			for range seconds {
+				fill(t, r.log, 1)
+				synctest.Wait()
+				b.tick(t, r)
+				synctest.Wait()
+				time.Sleep(time.Second)
+			}
+		}
+		// Acks take 25 s, two and a half times the starting timeout.
+		run(100)
+		early := testutil.ToFloat64(r.m.Resends)
+		if early == 0 || early > 3 {
+			t.Fatalf("%v resends before the first ack delay was measured, want 1 to 3", early)
+		}
+		run(200)
+		if late := testutil.ToFloat64(r.m.Resends); late != early {
+			t.Fatalf("%v resends while the backend was slow but lossless, after the delay was known", late-early)
+		}
+		if b.acked < 270 {
+			t.Fatalf("only %d of 300 readings acked", b.acked)
+		}
+		// The backend is fast again; then it loses one batch.
+		b.delay = time.Second
+		run(100)
+		resends := testutil.ToFloat64(r.m.Resends)
+		b.drop = 1
+		run(15)
+		if got := testutil.ToFloat64(r.m.Resends); got != resends+1 {
+			t.Fatalf("a lost batch caused %v resends within 15 s, want 1", got-resends)
+		}
+		run(10)
+		if want := r.log.Next() - 1; b.acked+2 < want {
+			t.Fatalf("acked %d of %d after the resend", b.acked, want)
 		}
 	})
 }

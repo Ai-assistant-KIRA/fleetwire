@@ -86,7 +86,7 @@ var keys = []key{
 		func(c *Config, v any) (err error) { c.BatchWait, err = asDuration(v); return }},
 	{"uplink.max-inflight", "1000", "Maximum readings sent but not acknowledged end to end.",
 		func(c *Config, v any) (err error) { c.MaxInflight, err = asInt(v); return }},
-	{"uplink.ack-timeout", "30s", "Resend everything unacknowledged when no ack arrives for this long; doubles after each timeout (up to 8x) until an ack shows progress.",
+	{"uplink.ack-timeout", "30s", "Shortest wait for an end-to-end ack before everything unacknowledged is resent. The wait follows the measured ack delay, as in TCP, and doubles after each timeout, up to 8x.",
 		func(c *Config, v any) (err error) { c.AckTimeout, err = asDuration(v); return }},
 	{"metrics.listen", "127.0.0.1:9465", "Address of the metrics and status endpoint. Empty disables it.",
 		func(c *Config, v any) (err error) { c.MetricsListen, err = asString(v); return }},
