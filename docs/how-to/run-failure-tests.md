@@ -4,11 +4,14 @@ The chaos runner checks the delivery guarantee under nine faults. A scenario
 passes only with **0 missing and 0 duplicates**.
 
 ```console
-$ make up build
-$ bin/fleetwire-chaos run -devices 2000              # all scenarios
-$ bin/fleetwire-chaos run -scenario network-cut,ingest-kill -devices 200
+$ make chaos                                           # all scenarios, 2,000 devices
+$ make chaos SCENARIOS=network-cut,ingest-kill DEVICES=200
 $ bin/fleetwire-chaos list
 ```
+
+`make chaos` builds the binaries, starts the stack and runs
+`bin/fleetwire-chaos run`; call the binary directly for the other flags
+(`-steady`, `-after`, `-wal-sync`, `-interval`).
 
 Each scenario: wait for a healthy stack, create a fresh tenant, start the
 load generator, keep steady load (`-steady`, 60 s), inject the fault, hold

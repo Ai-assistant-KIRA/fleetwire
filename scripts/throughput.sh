@@ -24,7 +24,8 @@ steps=("$@")
 [ ${#steps[@]} -gt 0 ] || steps=(250x1 500x1 1000x1 1500x1 2000x1 500x4 500x16 500x64)
 step_s=${STEP:-180}
 state=${STATE_DIR:-.cache/throughput}
-commit=$(git rev-parse --short=12 HEAD)$(git diff --quiet HEAD -- . ':!docs' || echo -dirty)
+# -dirty when tracked files differ from the commit, as in the chaos tables.
+commit=$(git rev-parse --short=12 HEAD)$([ -z "$(git status --porcelain --untracked-files=no)" ] || echo -dirty)
 out=${OUT:-docs/results/$(date -u +%Y-%m-%dT%H%M%SZ)-${commit}-throughput.md}
 prom=http://127.0.0.1:9090
 ca=deploy/compose/secrets/ca-bundle.pem

@@ -145,6 +145,17 @@ demo-stop: ## Stop the demo agents
 e2e: build up ## Run the end-to-end tests against the running stack
 	FLEETWIRE_E2E=1 $(GO) test -count=1 -timeout 15m ./test/e2e/...
 
+DEVICES   ?= 2000
+SCENARIOS ?=
+
+.PHONY: chaos
+chaos: build up ## Run the failure suite (DEVICES=2000, SCENARIOS=a,b or all) and write docs/results
+	bin/fleetwire-chaos run -devices $(DEVICES) $(if $(SCENARIOS),-scenario $(SCENARIOS))
+
+.PHONY: throughput
+throughput: build up ## Find the highest load ingest keeps up with and write docs/results
+	./scripts/throughput.sh
+
 .PHONY: clean
 clean: ## Remove build output
 	rm -rf bin dist
