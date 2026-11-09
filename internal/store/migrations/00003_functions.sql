@@ -1,7 +1,7 @@
 -- SECURITY DEFINER lookups for the few operations that happen before the
 -- tenant is known (design 11.3). Each runs as the owner with a fixed
 -- search_path, returns only the columns its caller needs, and can be
--- executed by fleetwire_app only.
+-- executed by the runtime role only.
 
 -- +goose Up
 
@@ -189,18 +189,18 @@ REVOKE ALL ON FUNCTION fleetwire.list_tenants(uuid, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleetwire.operator_audit(bigint, int) FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleetwire.revoked_device_certs() FROM PUBLIC;
 REVOKE ALL ON FUNCTION fleetwire.delete_expired_device_certs() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION fleetwire.device_for_ingest(uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.device_lookup(uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.consume_enrollment_token(bytea, uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.api_token_lookup(uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.operator_token_lookup(uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.touch_operator_token(uuid) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.claim_jobs(text[], int, interval, text) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.list_active_tenants() TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.list_tenants(uuid, int) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.operator_audit(bigint, int) TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.revoked_device_certs() TO fleetwire_app;
-GRANT EXECUTE ON FUNCTION fleetwire.delete_expired_device_certs() TO fleetwire_app;
+GRANT EXECUTE ON FUNCTION fleetwire.device_for_ingest(uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.device_lookup(uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.consume_enrollment_token(bytea, uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.api_token_lookup(uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.operator_token_lookup(uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.touch_operator_token(uuid) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.claim_jobs(text[], int, interval, text) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.list_active_tenants() TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.list_tenants(uuid, int) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.operator_audit(bigint, int) TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.revoked_device_certs() TO {{runtime_role}};
+GRANT EXECUTE ON FUNCTION fleetwire.delete_expired_device_certs() TO {{runtime_role}};
 
 -- The audit log is append-only even for the owner. Grants alone would allow
 -- a later mistaken GRANT UPDATE to break that; the trigger does not.

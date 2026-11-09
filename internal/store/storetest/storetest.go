@@ -72,7 +72,7 @@ func start() (*Env, error) {
 		OwnerURL: withUser(super, "fleetwire_owner", "owner", "fleetwire"),
 		AppURL:   withUser(super, "fleetwire_app", "app", "fleetwire"),
 	}
-	if _, err := store.Migrate(ctx, e.OwnerURL); err != nil {
+	if _, err := store.Migrate(ctx, e.OwnerURL, store.MigrateOptions{}); err != nil {
 		return nil, err
 	}
 	return e, nil

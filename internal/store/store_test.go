@@ -456,10 +456,11 @@ func TestDedupeKey(t *testing.T) {
 	}
 }
 
-// TestEnsureLoginRole runs the step a managed-database deployment uses to
-// create the runtime role: as a login role with only CREATEROLE, as
-// Charmed PostgreSQL hands out, never as a superuser.
-func TestEnsureLoginRole(t *testing.T) {
+// TestGroupRuntimeRole migrates a database the way Charmed PostgreSQL is
+// set up: the schema owner is a role the login user switches to, and the
+// services log in as users that are members of a group (charmed_dml there).
+// The policies and grants name the group, and they must hold for its members.
+func TestGroupRuntimeRole(t *testing.T) {
 	ctx := t.Context()
 	e := storetest.Start(t)
 	super, err := pgx.Connect(ctx, e.SuperURL)
@@ -468,66 +469,68 @@ func TestEnsureLoginRole(t *testing.T) {
 	}
 	defer func() { _ = super.Close(context.WithoutCancel(ctx)) }()
 	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
-	owner, app := "relation_owner_"+suffix, "runtime_"+suffix
-	if _, err := super.Exec(ctx, "CREATE ROLE "+owner+" LOGIN CREATEROLE PASSWORD 'relation-password'"); err != nil {
-		t.Fatal(err)
-	}
-	ownerURL := withRole(t, e.OwnerURL, owner, "relation-password")
-
-	first, second := "first-Password-0123456789", "second-Password-9876543210"
-	if err := store.EnsureLoginRole(ctx, ownerURL, app, first); err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	connectAs := func(password string) error {
-		c, err := pgx.Connect(ctx, withRole(t, e.OwnerURL, app, password))
-		if err != nil {
-			return err
+	db, group, member := "fleetwire_group_"+suffix, "runtime_group_"+suffix, "runtime_member_"+suffix
+	for _, q := range []string{
+		"CREATE ROLE " + group + " NOLOGIN",
+		"CREATE ROLE " + member + " LOGIN PASSWORD 'member' IN ROLE " + group,
+		"CREATE DATABASE " + db + " OWNER fleetwire_owner",
+	} {
+		if _, err := super.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
 		}
-		return c.Close(ctx)
 	}
-	if err := connectAs(first); err != nil {
-		t.Fatalf("login with the new password: %v", err)
+	ownerURL := withRole(t, e.OwnerURL, "fleetwire_owner", "owner", db)
+	if _, err := store.Migrate(ctx, ownerURL, store.MigrateOptions{RuntimeRole: group}); err != nil {
+		t.Fatalf("migrate with runtime role %s: %v", group, err)
 	}
-	var isSuper, createRole, createDB, bypass, inherit, login bool
-	if err := super.QueryRow(ctx, `SELECT rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolinherit, rolcanlogin
-		FROM pg_roles WHERE rolname = $1`, app).Scan(&isSuper, &createRole, &createDB, &bypass, &inherit, &login); err != nil {
-		t.Fatal(err)
-	}
-	if isSuper || createRole || createDB || bypass || inherit || !login {
-		t.Fatalf("role attributes: super %v createrole %v createdb %v bypassrls %v inherit %v login %v",
-			isSuper, createRole, createDB, bypass, inherit, login)
-	}
-	var stored string
-	if err := super.QueryRow(ctx, `SELECT rolpassword FROM pg_authid WHERE rolname = $1`, app).Scan(&stored); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasPrefix(stored, "SCRAM-SHA-256$4096:") || strings.Contains(stored, first) {
-		t.Fatalf("stored secret is not a SCRAM verifier: %.20s...", stored)
+	if _, err := store.Migrate(ctx, ownerURL, store.MigrateOptions{RuntimeRole: "Robert'); DROP TABLE x; --"}); err == nil {
+		t.Fatal("an invalid role name was accepted")
 	}
 
-	// Running it again resets the password: the old one stops working.
-	if err := store.EnsureLoginRole(ctx, ownerURL, app, second); err != nil {
-		t.Fatalf("reset: %v", err)
+	app, err := store.Connect(ctx, withRole(t, e.OwnerURL, member, "member", db), store.Options{ApplicationName: t.Name()})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := connectAs(second); err != nil {
-		t.Fatalf("login after reset: %v", err)
+	defer app.Close()
+	if err := app.CheckRuntimeRole(ctx); err != nil {
+		t.Fatalf("a member of the runtime group is refused: %v", err)
 	}
-	if err := connectAs(first); err == nil {
-		t.Fatal("the old password still works")
+	// The fixtures are written through the policies' WITH CHECK clauses.
+	a, _ := newFixture(t, app), newFixture(t, app)
+	conn, err := pgx.Connect(ctx, withRole(t, e.OwnerURL, member, "member", db))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, bad := range []string{"short", "has a space in it 0123", "non-ascii-é-0123456789"} {
-		if err := store.EnsureLoginRole(ctx, ownerURL, app, bad); err == nil {
-			t.Errorf("password %q was accepted", bad)
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	for _, table := range tenantTables {
+		if n := countRows(ctx, t, conn, table); n != 0 {
+			t.Errorf("%s: a group member without a tenant sees %d rows", table, n)
+		}
+	}
+	// With tenant A set, exactly A's rows are visible: one of each.
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if _, err := tx.Exec(ctx, `SELECT set_config('fleetwire.tenant_id', $1, true)`, a.tenant.String()); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"tenants", "devices", "chunks", "device_gaps", "tenant_keys"} {
+		if n := countRows(ctx, t, tx, table); n != 1 {
+			t.Errorf("%s: tenant %s sees %d rows, want its own 1", table, a.tenant, n)
 		}
 	}
 }
 
-func withRole(t *testing.T, raw, user, password string) string {
+// withRole points raw at database db as user.
+func withRole(t *testing.T, raw, user, password, db string) string {
 	t.Helper()
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
 	u.User = url.UserPassword(user, password)
+	u.Path = "/" + db
 	return u.String()
 }

@@ -12,7 +12,7 @@ type apiConfig struct {
 
 	DatabaseURL      string `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" secret:"true" help:"PostgreSQL URL for the runtime role (fleetwire_app)."`
 	OwnerDatabaseURL string `env:"FLEETWIRE_DATABASE_OWNER_URL" flag:"database-owner-url" secret:"true" help:"PostgreSQL URL for the schema owner. Used only by migrate and create-operator-token."`
-	AppDBPassword    string `env:"FLEETWIRE_DATABASE_APP_PASSWORD" flag:"database-app-password" secret:"true" help:"When set, migrate creates the runtime role fleetwire_app with this password (or resets it). For managed PostgreSQL without an init script, such as Charmed PostgreSQL."`
+	RuntimeRole      string `env:"FLEETWIRE_DATABASE_RUNTIME_ROLE" flag:"database-runtime-role" default:"fleetwire_app" help:"Role that migrate gives the row-level security policies and grants: the services' login role, or a group it belongs to (charmed_dml on Charmed PostgreSQL)."`
 	DBMaxConns       int32  `env:"FLEETWIRE_DATABASE_MAX_CONNS" flag:"database-max-conns" default:"20" help:"Connection pool size."`
 
 	PublicListen string `env:"FLEETWIRE_API_PUBLIC_LISTEN" flag:"public-listen" default:":8443" help:"Tenant and operator API listener (TLS)."`

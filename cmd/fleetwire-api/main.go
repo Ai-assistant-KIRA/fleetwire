@@ -92,13 +92,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 
 	switch cmd {
 	case "migrate":
-		if cfg.AppDBPassword != "" {
-			if err := store.EnsureLoginRole(ctx, cfg.OwnerDatabaseURL, store.AppRole, cfg.AppDBPassword); err != nil {
-				return err
-			}
-			fmt.Fprintf(stdout, "role %s is ready\n", store.AppRole)
-		}
-		res, err := store.Migrate(ctx, cfg.OwnerDatabaseURL)
+		res, err := store.Migrate(ctx, cfg.OwnerDatabaseURL, store.MigrateOptions{RuntimeRole: cfg.RuntimeRole})
 		if err != nil {
 			return err
 		}
