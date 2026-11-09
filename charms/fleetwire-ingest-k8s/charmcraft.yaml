@@ -1,0 +1,77 @@
+name: fleetwire-ingest-k8s
+type: charm
+title: fleetwire ingest
+summary: Stores uplink batches from Kafka in PostgreSQL exactly once and sends the end-to-end acks.
+description: |
+  Runs fleetwire-ingest in a Pebble-managed container. Kafka comes from
+  Charmed Kafka over kafka_client (SASL/SCRAM, TLS when Kafka has it), and
+  PostgreSQL from Charmed PostgreSQL over postgresql_client, as a login with
+  the extra user role charmed_dml that stays inside row-level security. The
+  keyring address comes from fleetwire-api-k8s over fleetwire_ingest, once
+  the API has migrated the database: ingest never holds the database owner's
+  credentials or the tenant KEKs. The broker address comes from
+  mosquitto-k8s over fleetwire_mqtt.
+
+  The service certificate (CN fleetwire-ingest) arrives in a Juju user
+  secret; set its ID in the pki-secret option.
+links:
+  source: https://github.com/Ai-assistant-KIRA/fleetwire
+  documentation: https://github.com/Ai-assistant-KIRA/fleetwire/blob/main/docs/how-to/deploy-with-juju.md
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  charm:
+    plugin: charm
+    source: .
+
+containers:
+  ingest:
+    resource: ingest-image
+
+resources:
+  ingest-image:
+    type: oci-image
+    description: OCI image with fleetwire-ingest at /usr/local/bin/service.
+    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.1.0
+
+peers:
+  ingest-peers:
+    interface: fleetwire_ingest_peers
+
+requires:
+  database:
+    interface: postgresql_client
+    limit: 1
+  kafka:
+    interface: kafka_client
+    limit: 1
+  api:
+    interface: fleetwire_ingest
+    limit: 1
+  mqtt:
+    interface: fleetwire_mqtt
+    limit: 1
+
+config:
+  options:
+    pki-secret:
+      type: string
+      description: |
+        ID of a Juju user secret with the keys tls-cert and tls-key (the
+        fleetwire-ingest service certificate) and ca-bundle (the CA that
+        signed the broker and API certificates).
+    kafka-replication:
+      type: int
+      default: 3
+      description: Replication factor of the topics ingest creates. At most the number of Kafka brokers.
+    workers:
+      type: int
+      default: 16
+      description: Kafka partitions processed in parallel per unit.
+    log-level:
+      type: string
+      default: info
+      description: debug, info, warn or error.

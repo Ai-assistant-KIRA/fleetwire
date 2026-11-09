@@ -1,0 +1,251 @@
+# Copyright 2026 Reda Alaarabi
+# SPDX-License-Identifier: Apache-2.0
+"""State-transition tests for the fleetwire-ingest charm (ops.testing)."""
+
+from __future__ import annotations
+
+import ops
+import pytest
+from ops import testing
+
+import charm
+from charm import BINARY, CONTAINER, PEER, SERVICE, FleetwireIngestCharm
+
+PKI = {"tls-cert": "INGEST CERT", "tls-key": "INGEST KEY", "ca-bundle": "CA BUNDLE"}
+KAFKA = {
+    "endpoints": "kafka-k8s-0.kafka-k8s-endpoints:9092",
+    "username": "relation-11",
+    "password": "kafka-password",
+    "tls": "disabled",
+    "consumer-group-prefix": "fleetwire-",
+    "topic": "fleetwire.*",
+}
+DB = {
+    "endpoints": "postgresql-k8s-primary.test.svc.cluster.local:5432",
+    "database": "fleetwire",
+    "username": "relation_id_12",
+    "password": "ingest-db-password",
+}
+API = {"keyring-url": "https://fleetwire-api-k8s.test.svc:8445", "schema-ready": "true"}
+
+
+@pytest.fixture
+def ctx() -> testing.Context:
+    return testing.Context(FleetwireIngestCharm)
+
+
+@pytest.fixture(autouse=True)
+def not_ready(monkeypatch):
+    monkeypatch.setattr(charm, "readyz", lambda port: False)
+
+
+def setup(*, kafka=None, db=None, api=None, mqtt=True, pki=None, leader=True, topics_code=0, config=None):
+    """Builds a state with every input ready unless a test turns one off."""
+    secrets, relations = [], [testing.PeerRelation(PEER)]
+    cfg = dict(config or {})
+    if pki is not False:
+        s = testing.Secret(tracked_content=pki or PKI)
+        secrets.append(s)
+        cfg.setdefault("pki-secret", s.id)
+    if kafka is not False:
+        relations.append(
+            testing.Relation(
+                "kafka",
+                interface="kafka_client",
+                remote_app_name="kafka-k8s",
+                remote_app_data=KAFKA if kafka is None else kafka,
+            )
+        )
+    if db is not False:
+        relations.append(
+            testing.Relation(
+                "database",
+                interface="postgresql_client",
+                remote_app_name="postgresql-k8s",
+                remote_app_data=DB if db is None else db,
+            )
+        )
+    if api is not False:
+        relations.append(
+            testing.Relation(
+                "api",
+                interface="fleetwire_ingest",
+                remote_app_name="fleetwire-api-k8s",
+                remote_app_data=API if api is None else api,
+            )
+        )
+    if mqtt:
+        relations.append(
+            testing.Relation(
+                "mqtt",
+                interface="fleetwire_mqtt",
+                remote_app_name="mosquitto-k8s",
+                remote_app_data={"service-url": "tls://mosquitto-k8s.test.svc:8884"},
+            )
+        )
+    container = testing.Container(
+        CONTAINER, can_connect=True, execs={testing.Exec([BINARY, "ensure-topics"], return_code=topics_code)}
+    )
+    return testing.State(
+        leader=leader,
+        config=cfg,
+        secrets=secrets,
+        relations=relations,
+        containers=[container],
+        model=testing.Model(name="test"),
+    )
+
+
+def env_of(out: testing.State) -> dict[str, str]:
+    return out.get_container(CONTAINER).plan.services[SERVICE].environment
+
+
+def test_starts_with_its_database_login_kafka_keyring_and_broker(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup())
+    env = env_of(out)
+    assert env["FLEETWIRE_DATABASE_URL"] == (
+        "postgres://relation_id_12:ingest-db-password@postgresql-k8s-primary.test.svc.cluster.local:5432/fleetwire"
+        "?sslmode=prefer"
+    )
+    assert env["FLEETWIRE_KAFKA_BROKERS"] == KAFKA["endpoints"]
+    assert env["FLEETWIRE_KAFKA_SASL_MECHANISM"] == "SCRAM-SHA-512"
+    assert env["FLEETWIRE_KAFKA_USERNAME"] == "relation-11"
+    assert env["FLEETWIRE_KAFKA_TLS"] == "false"
+    # The group carries the prefix Kafka granted READ on.
+    assert env["FLEETWIRE_KAFKA_GROUP"] == "fleetwire-ingest"
+    assert env["FLEETWIRE_KEYRING_URL"] == "https://fleetwire-api-k8s.test.svc:8445"
+    assert "FLEETWIRE_KEYRING_DIR" not in env
+    assert env["FLEETWIRE_MQTT_URL"] == "tls://mosquitto-k8s.test.svc:8884"
+    assert env["FLEETWIRE_INSTANCE_ID"] == "fleetwire-ingest-k8s-0"
+    fs = out.get_container(CONTAINER).get_filesystem(ctx)
+    assert (fs / "etc/fleetwire/pki/ingest.key").read_text() == "INGEST KEY"
+    assert out.unit_status == testing.WaitingStatus("waiting for ingest to become ready")
+
+
+def test_leader_creates_the_topics_once(ctx):
+    first = ctx.run(ctx.on.config_changed(), setup())
+    calls = ctx.exec_history[CONTAINER]
+    assert [c.command for c in calls] == [[BINARY, "ensure-topics"]]
+    assert calls[0].environment["FLEETWIRE_KAFKA_REPLICATION"] == "3"
+    ctx.run(ctx.on.update_status(), first)
+    assert len(ctx.exec_history[CONTAINER]) == 1
+
+
+def test_failed_topic_creation_keeps_ingest_down(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(topics_code=1))
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
+
+
+def test_non_leaders_do_not_create_topics(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(leader=False))
+    assert not ctx.exec_history.get(CONTAINER)
+    assert SERVICE in out.get_container(CONTAINER).plan.services
+
+
+def test_kafka_tls_uses_the_relation_ca(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(kafka={**KAFKA, "tls": "enabled", "tls-ca": "KAFKA CA"}))
+    env = env_of(out)
+    assert env["FLEETWIRE_KAFKA_TLS"] == "true"
+    assert env["FLEETWIRE_KAFKA_TLS_CA_FILE"] == "/etc/fleetwire/pki/kafka-ca.pem"
+    fs = out.get_container(CONTAINER).get_filesystem(ctx)
+    assert (fs / "etc/fleetwire/pki/kafka-ca.pem").read_text() == "KAFKA CA"
+
+
+def test_another_group_prefix_is_honoured(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(kafka={**KAFKA, "consumer-group-prefix": "relation-11-"}))
+    assert env_of(out)["FLEETWIRE_KAFKA_GROUP"] == "relation-11-ingest"
+
+
+@pytest.mark.parametrize(
+    ("missing", "status"),
+    [
+        (
+            {"kafka": False},
+            testing.BlockedStatus("integrate with kafka-k8s: juju integrate fleetwire-ingest-k8s:kafka kafka-k8s"),
+        ),
+        (
+            {"api": False},
+            testing.BlockedStatus(
+                "integrate with fleetwire-api-k8s: juju integrate fleetwire-ingest-k8s:api fleetwire-api-k8s"
+            ),
+        ),
+        (
+            {"mqtt": False},
+            testing.BlockedStatus(
+                "integrate with mosquitto-k8s: juju integrate fleetwire-ingest-k8s:mqtt mosquitto-k8s"
+            ),
+        ),
+        (
+            {"db": False},
+            testing.BlockedStatus(
+                "integrate with postgresql-k8s: juju integrate fleetwire-ingest-k8s:database postgresql-k8s"
+            ),
+        ),
+        ({"db": {}}, testing.WaitingStatus("waiting for database relation data")),
+        ({"kafka": {}}, testing.WaitingStatus("waiting for kafka relation data")),
+        # The API has not migrated the database yet, so there are no tables.
+        (
+            {"api": {"keyring-url": "https://fleetwire-api-k8s.test.svc:8445"}},
+            testing.WaitingStatus("waiting for the API to migrate the database"),
+        ),
+        ({"pki": False}, testing.BlockedStatus("set pki-secret to the ID of the ingest certificate secret")),
+        ({"pki": {"tls-cert": "C"}}, testing.BlockedStatus("pki-secret lacks ca-bundle, tls-key")),
+    ],
+)
+def test_reports_what_is_missing(ctx, missing, status):
+    out = ctx.run(ctx.on.config_changed(), setup(**missing))
+    assert out.unit_status == status
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
+
+
+def test_active_when_ingest_reports_ready(ctx, monkeypatch):
+    monkeypatch.setattr(charm, "readyz", lambda port: port == 9090)
+    out = ctx.run(ctx.on.config_changed(), setup())
+    assert out.unit_status == testing.ActiveStatus()
+
+
+def test_losing_kafka_stops_ingest(ctx):
+    st = setup()
+    running = ctx.run(ctx.on.config_changed(), st)
+    kafka = next(r for r in running.relations if r.endpoint == "kafka")
+    out = ctx.run(ctx.on.relation_broken(kafka), running)
+    assert out.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.INACTIVE
+
+
+def test_database_tls_is_verified_when_postgresql_offers_it(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(db={**DB, "tls": "True", "tls-ca": "PG CA"}))
+    assert env_of(out)["FLEETWIRE_DATABASE_URL"].endswith(
+        "?sslmode=verify-full&sslrootcert=/etc/fleetwire/pki/postgresql-ca.pem"
+    )
+    fs = out.get_container(CONTAINER).get_filesystem(ctx)
+    assert (fs / "etc/fleetwire/pki/postgresql-ca.pem").read_text() == "PG CA"
+
+
+def test_requests_a_login_in_the_runtime_group(ctx):
+    st = setup(db={})
+    db = next(r for r in st.relations if r.endpoint == "database")
+    out = ctx.run(ctx.on.relation_created(db), st)
+    data = out.get_relation(db.id).local_app_data
+    # charmed_dml: not the schema owner, and a member of the group the API's
+    # migrations give the row-level security policies to.
+    assert data["database"] == "fleetwire"
+    assert data["extra-user-roles"] == "charmed_dml"
+
+
+def test_losing_the_database_stops_ingest(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    db = next(r for r in running.relations if r.endpoint == "database")
+    out = ctx.run(ctx.on.relation_broken(db), running)
+    assert out.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.INACTIVE
+
+
+def test_requests_consume_and_produce_rights_on_the_fleetwire_topics(ctx):
+    st = setup(kafka={})
+    kafka = next(r for r in st.relations if r.endpoint == "kafka")
+    out = ctx.run(ctx.on.relation_created(kafka), st)
+    data = out.get_relation(kafka.id).local_app_data
+    # One wildcard covers the uplink and dead-letter topics; producer
+    # includes CREATE for ensure-topics.
+    assert data["topic"] == "fleetwire.*"
+    assert data["extra-user-roles"] == "consumer,producer"
+    assert data["consumer-group-prefix"] == "fleetwire-"
