@@ -2,6 +2,7 @@ package chaos
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -43,12 +44,20 @@ func Machine() string {
 	return fmt.Sprintf("%d vCPU %s, %s, %s", runtime.NumCPU(), cpu, mem, osName)
 }
 
+// gitSHA names the commit the results came from, marked -dirty when tracked
+// files differ from it, so a table never claims a commit it did not test.
 func gitSHA(ctx context.Context, repo string) string {
-	out, err := exec.CommandContext(context.WithoutCancel(ctx), "git", "-C", repo, "rev-parse", "--short=12", "HEAD").Output() //nolint:gosec // G204: fixed program
+	ctx = context.WithoutCancel(ctx)
+	out, err := exec.CommandContext(ctx, "git", "-C", repo, "rev-parse", "--short=12", "HEAD").Output() //nolint:gosec // G204: fixed program
 	if err != nil {
 		return "unknown"
 	}
-	return strings.TrimSpace(string(out))
+	sha := strings.TrimSpace(string(out))
+	status, err := exec.CommandContext(ctx, "git", "-C", repo, "status", "--porcelain", "--untracked-files=no").Output() //nolint:gosec // G204: fixed program
+	if err != nil || len(bytes.TrimSpace(status)) > 0 {
+		sha += "-dirty"
+	}
+	return sha
 }
 
 // Table renders rows as Markdown.
