@@ -1,0 +1,116 @@
+# promtool test rules deploy/prometheus/tests/fleetwire_test.yml
+rule_files:
+  - ../rules/fleetwire.yml
+evaluation_interval: 1m
+
+# Bucket bounds are written le="5.0" as Prometheus 3 stores them after a
+# scrape, so these tests use the same series the rules see in production.
+tests:
+  # 20% of readings arrive late for over an hour. The 1 h and 5 m error
+  # ratios (0.2) both exceed 14.4 x the 1% budget (0.144): the fast alert
+  # pages.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_e2e_delay_seconds_bucket{le="5.0"}'
+        values: '0+80x90'
+      - series: 'fleetwire_ingest_e2e_delay_seconds_count'
+        values: '0+100x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: FleetwireFreshnessBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: freshness}
+            exp_annotations:
+              summary: Readings are reaching storage too late; the 30-day freshness budget burns 14.4x too fast.
+              runbook: docs/how-to/run-failure-tests.md
+
+  # All readings on time: the SLI is 0 (not missing) and nothing fires.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_e2e_delay_seconds_bucket{le="5.0"}'
+        values: '0+100x90'
+      - series: 'fleetwire_ingest_e2e_delay_seconds_count'
+        values: '0+100x90'
+    promql_expr_test:
+      - expr: fleetwire:freshness_errors:ratio_rate5m
+        eval_time: 70m
+        exp_samples:
+          - labels: 'fleetwire:freshness_errors:ratio_rate5m'
+            value: 0
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: FleetwireFreshnessBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 70m
+        alertname: FleetwireFreshnessBudgetBurnSlow
+        exp_alerts: []
+
+  # One batch in a thousand dead-lettered: 10x the 0.01% budget, above the
+  # slow (6x) threshold but below the fast (14.4x) one, so only a ticket.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_batches_total{result="dlq"}'
+        values: '0+1x400'
+      - series: 'fleetwire_ingest_batches_total{result="stored"}'
+        values: '0+999x400'
+    alert_rule_test:
+      - eval_time: 6h10m
+        alertname: FleetwireDeadLetterBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: correctness}
+            exp_annotations:
+              summary: Batches are going to the dead-letter topic at a rate that will exhaust the budget.
+      - eval_time: 6h10m
+        alertname: FleetwireDeadLetterBudgetBurnFast
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api:9090"}'
+        values: '172000+60x60'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: FleetwireCRLStale
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No API replica has published the device CRL for 48 h; the broker will reject all devices when it expires.
+
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_exclusion_violations_total{instance="ingest-1:9090"}'
+        values: '0 0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FleetwireExclusionViolation
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FleetwireExclusionViolation
+        exp_alerts:
+          # The alert keeps the instance, so the page names the ingest replica.
+          - exp_labels: {severity: page, instance: "ingest-1:9090"}
+            exp_annotations:
+              summary: The database rejected an overlapping chunk. This is a bug signal; the batch went to the DLQ and the device will resend.
+
+  # No batch was dead-lettered and no request failed: both ratios are 0.
+  # Counters with no error series must not make the SLI disappear.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_batches_total{result="stored",instance="ingest-1:9090"}'
+        values: '0+100x90'
+      - series: 'fleetwire_api_requests_total{code="200",route="GET /v1/devices"}'
+        values: '0+50x90'
+    promql_expr_test:
+      - expr: fleetwire:dlq_errors:ratio_rate5m
+        eval_time: 30m
+        exp_samples:
+          - labels: 'fleetwire:dlq_errors:ratio_rate5m'
+            value: 0
+      - expr: fleetwire:api_errors:ratio_rate5m
+        eval_time: 30m
+        exp_samples:
+          - labels: 'fleetwire:api_errors:ratio_rate5m'
+            value: 0

@@ -31,6 +31,10 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/wal"
 )
 
+// droppedDiskBudget is the reason label of readings the WAL dropped to stay
+// within its disk budget.
+const droppedDiskBudget = "disk_budget"
+
 // Metrics are shared by every Device in a process.
 type Metrics struct {
 	Collected       *prometheus.CounterVec
@@ -63,6 +67,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		MQTT:   mqttconn.NewMetrics(reg, "fleetwire_agent"),
 	}
 	reg.MustRegister(m.Collected, m.CollectorErrors, m.Dropped, m.AppendErrors, m.WALBytes, m.WALSegments, m.Renewals)
+	// Known label values start at 0, so dashboards and rate() see the series
+	// before the first event.
+	m.Dropped.WithLabelValues(droppedDiskBudget)
+	m.Renewals.WithLabelValues("ok")
+	m.Renewals.WithLabelValues("error")
 	return m
 }
 
@@ -433,7 +442,7 @@ func (d *Device) updateStats() {
 	m.WALBytes.Add(float64(st.Bytes - d.lastStats.Bytes))
 	m.WALSegments.Add(float64(st.Segments - d.lastStats.Segments))
 	if st.DroppedTotal > d.lastStats.DroppedTotal {
-		m.Dropped.WithLabelValues("disk_budget").Add(float64(st.DroppedTotal - d.lastStats.DroppedTotal))
+		m.Dropped.WithLabelValues(droppedDiskBudget).Add(float64(st.DroppedTotal - d.lastStats.DroppedTotal))
 	}
 	d.lastStats = st
 }

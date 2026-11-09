@@ -63,6 +63,11 @@ build: ## Build every binary into bin/
 vuln: ## Scan dependencies for known vulnerabilities
 	govulncheck ./...
 
+.PHONY: rules-test
+rules-test: ## Check the Prometheus rules and run their unit tests
+	promtool check rules deploy/prometheus/rules/*.yml
+	promtool test rules deploy/prometheus/tests/*.yml
+
 # ---- Local stack ----------------------------------------------------------
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml

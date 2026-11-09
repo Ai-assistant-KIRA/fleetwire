@@ -94,6 +94,11 @@ func New(cfg Config, log *slog.Logger, reg prometheus.Registerer) (*Bridge, erro
 		mqtt: mqttconn.NewMetrics(reg, "fleetwire_bridge"),
 	}
 	reg.MustRegister(b.m.forwarded, b.m.pending, b.m.produceSecs, b.m.lastOK)
+	// Every result exists from the start at 0, so rate() and alerts see the
+	// series before the first error.
+	for _, r := range []string{"ok", "error", "rejected"} {
+		b.m.forwarded.WithLabelValues(r)
+	}
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(cfg.Brokers...),
 		kgo.ClientID(cfg.ClientID),

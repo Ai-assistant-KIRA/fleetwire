@@ -97,6 +97,11 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 			Help: "Chunks rejected by the overlap constraint. Must stay 0."}),
 	}
 	reg.MustRegister(m.Batches, m.ReadingsStored, m.GapSeqs, m.E2EDelay, m.TxSeconds, m.Skew, m.NegativeDelay, m.DBRetries, m.Overlaps)
+	// Every result exists from the start at 0, so the dead-letter SLI is a
+	// number before the first failure instead of no data.
+	for _, r := range []Result{ResultStored, ResultDuplicate, ResultDroppedRevoked, ResultDroppedUnknown, ResultDLQ} {
+		m.Batches.WithLabelValues(string(r))
+	}
 	return m
 }
 
