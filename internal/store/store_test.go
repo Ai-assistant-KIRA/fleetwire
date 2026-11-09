@@ -3,6 +3,8 @@ package store_test
 import (
 	"context"
 	"errors"
+	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -452,4 +454,80 @@ func TestDedupeKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestEnsureLoginRole runs the step a managed-database deployment uses to
+// create the runtime role: as a login role with only CREATEROLE, as
+// Charmed PostgreSQL hands out, never as a superuser.
+func TestEnsureLoginRole(t *testing.T) {
+	ctx := t.Context()
+	e := storetest.Start(t)
+	super, err := pgx.Connect(ctx, e.SuperURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = super.Close(context.WithoutCancel(ctx)) }()
+	suffix := strings.ReplaceAll(uuid.NewString()[:8], "-", "")
+	owner, app := "relation_owner_"+suffix, "runtime_"+suffix
+	if _, err := super.Exec(ctx, "CREATE ROLE "+owner+" LOGIN CREATEROLE PASSWORD 'relation-password'"); err != nil {
+		t.Fatal(err)
+	}
+	ownerURL := withRole(t, e.OwnerURL, owner, "relation-password")
+
+	first, second := "first-Password-0123456789", "second-Password-9876543210"
+	if err := store.EnsureLoginRole(ctx, ownerURL, app, first); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	connectAs := func(password string) error {
+		c, err := pgx.Connect(ctx, withRole(t, e.OwnerURL, app, password))
+		if err != nil {
+			return err
+		}
+		return c.Close(ctx)
+	}
+	if err := connectAs(first); err != nil {
+		t.Fatalf("login with the new password: %v", err)
+	}
+	var isSuper, createRole, createDB, bypass, inherit, login bool
+	if err := super.QueryRow(ctx, `SELECT rolsuper, rolcreaterole, rolcreatedb, rolbypassrls, rolinherit, rolcanlogin
+		FROM pg_roles WHERE rolname = $1`, app).Scan(&isSuper, &createRole, &createDB, &bypass, &inherit, &login); err != nil {
+		t.Fatal(err)
+	}
+	if isSuper || createRole || createDB || bypass || inherit || !login {
+		t.Fatalf("role attributes: super %v createrole %v createdb %v bypassrls %v inherit %v login %v",
+			isSuper, createRole, createDB, bypass, inherit, login)
+	}
+	var stored string
+	if err := super.QueryRow(ctx, `SELECT rolpassword FROM pg_authid WHERE rolname = $1`, app).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(stored, "SCRAM-SHA-256$4096:") || strings.Contains(stored, first) {
+		t.Fatalf("stored secret is not a SCRAM verifier: %.20s...", stored)
+	}
+
+	// Running it again resets the password: the old one stops working.
+	if err := store.EnsureLoginRole(ctx, ownerURL, app, second); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	if err := connectAs(second); err != nil {
+		t.Fatalf("login after reset: %v", err)
+	}
+	if err := connectAs(first); err == nil {
+		t.Fatal("the old password still works")
+	}
+	for _, bad := range []string{"short", "has a space in it 0123", "non-ascii-é-0123456789"} {
+		if err := store.EnsureLoginRole(ctx, ownerURL, app, bad); err == nil {
+			t.Errorf("password %q was accepted", bad)
+		}
+	}
+}
+
+func withRole(t *testing.T, raw, user, password string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.User = url.UserPassword(user, password)
+	return u.String()
 }
