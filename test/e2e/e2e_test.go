@@ -209,10 +209,32 @@ func TestEndToEnd(t *testing.T) {
 	waitFor(t, "enrollment", 30*time.Second, func() bool { return dev.DeviceID() != uuid.Nil })
 	id := dev.DeviceID().String()
 	// Enough data to roll several segments, then the acked ones must go.
-	waitFor(t, "several segments", 60*time.Second, func() bool { return dev.Status().WALSegments >= 3 })
+	// A sealed segment is deleted as soon as an ack covers it, so with a
+	// fast backend there may never be three at once: count the segment
+	// files seen over time instead (one rolls every few seconds here).
+	segments := func() []string {
+		entries, err := os.ReadDir(filepath.Join(dir, "wal"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".seg") {
+				names = append(names, e.Name())
+			}
+		}
+		return names
+	}
+	seen := map[string]bool{}
+	waitFor(t, "three segments written", 60*time.Second, func() bool {
+		for _, n := range segments() {
+			seen[n] = true
+		}
+		return len(seen) >= 3
+	})
 	dev.StopCollecting()
 	waitFor(t, "every reading acked", 60*time.Second, dev.Drained)
-	waitFor(t, "acked segments deleted", 30*time.Second, func() bool { return dev.Status().WALSegments == 1 })
+	waitFor(t, "acked segments deleted", 30*time.Second, func() bool { return len(segments()) == 1 })
 	st := dev.Status()
 	t.Logf("device %s: last seq %d acked %d", id, st.LastSeq, st.Acked)
 
