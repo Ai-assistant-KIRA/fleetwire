@@ -274,7 +274,32 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 	if err := r.waitHealthy(ctx, 5*time.Minute); err != nil {
 		return row, err
 	}
-	return r.check(ctx, row)
+	row, err = r.check(ctx, row)
+	if err != nil {
+		return row, err
+	}
+	return row, r.pruneDevices()
+}
+
+// pruneDevices deletes the devices' local logs and keys once the checker
+// has read results.jsonl. They are about nine files per device, so a
+// 2,000-device suite left 160,000 files, and a few runs, copied into
+// Docker build contexts as well, used up every inode of the test VM's
+// disk. The logs, results.jsonl and the checker's report stay in raw/.
+func (r *run) pruneDevices() error {
+	dir := filepath.Join(r.dir, "devices")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+				return fmt.Errorf("prune device state: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 func sleep(ctx context.Context, d time.Duration) {

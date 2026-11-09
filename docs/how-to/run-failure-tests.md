@@ -38,6 +38,8 @@ to 60 s), so it is often close to a minute after long outages.
 
 Results go to `docs/results/<time>-<commit>.md` and `.json`. Raw logs,
 `results.jsonl` and checker reports go to `docs/results/raw/` (git-ignored).
+Each device's local log and keys are deleted once the checker has read
+them; they are about nine files per device.
 
 ## Checking one device by hand
 
