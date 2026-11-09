@@ -1,0 +1,35 @@
+# Build output
+/bin/
+/dist/
+*.snap
+*.charm
+
+# Local secrets created by scripts/dev-ca. Private keys are never committed.
+/deploy/compose/secrets/
+*.key
+*-key.pem
+
+# Runtime state from local runs
+/.cache/
+/var/
+/deploy/ubuntu-core/work/
+/test/e2e/.state/
+
+# Go fuzzing corpus found locally (seed corpora live in testdata/ and are committed)
+testdata/fuzz/**/*-local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.tox/
+/charms/*/build/
+/charms/*/.coverage
+
+# Docs
+/docs/_build/
+
+# Editors
+.idea/
+.vscode/
+*.swp
