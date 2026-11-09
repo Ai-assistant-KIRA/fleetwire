@@ -91,7 +91,7 @@ func New(cfg Config, db *store.DB, keys *tenantkey.Manager, log *slog.Logger, re
 	s := &Service{cfg: cfg, log: log, keys: keys, m: m, proc: NewProcessor(db, keys, log, m),
 		tracer: otel.Tracer("fleetwire/ingest")}
 	s.lag = prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "fleetwire_ingest_consumer_lag",
-		Help: "Records behind the partition's high watermark after the last poll."}, []string{"partition"})
+		Help: "Records between the group's committed offset and the log end, for the partitions this instance owns."}, []string{"partition"})
 	reg.MustRegister(s.lag)
 	s.acks = NewAckPublisher(AckConfig{MQTTURL: cfg.MQTTURL, ClientID: "fleetwire-ingest-" + cfg.InstanceID,
 		TLS: cfg.TLS, Workers: cfg.AckWorkers}, log, reg)
@@ -125,6 +125,7 @@ func (s *Service) Run(ctx context.Context) error {
 		return err
 	}
 	wg.Go(func() { s.flushSeals(actx) })
+	wg.Go(func() { s.reportLag(ctx) })
 	defer func() {
 		s.kafka.Close()
 		// Acks for everything committed so far get a moment to go out.
@@ -165,11 +166,43 @@ func (s *Service) Run(ctx context.Context) error {
 				s.log.Warn("offset commit failed; records will be reprocessed", "err", err)
 			}
 		}
-		for _, p := range parts {
-			last := p.Records[len(p.Records)-1].Offset
-			s.lag.WithLabelValues(strconv.Itoa(int(p.Partition))).Set(float64(max(p.HighWatermark-last-1, 0)))
-		}
 		s.kafka.AllowRebalance()
+	}
+}
+
+// reportLag sets the consumer lag of the partitions this instance owns,
+// from the group's committed offsets and the log end offsets, every 10 s.
+// The fetch responses cannot tell: the client fetches ahead of the records
+// it has processed, so the fetched position sits near the log end even
+// while thousands of records wait (the first 10,000-device run showed 0 lag
+// with 120,000 records behind). Each instance reports only its own
+// partitions, so summing over instances counts each partition once.
+func (s *Service) reportLag(ctx context.Context) {
+	adm := kadm.NewClient(s.kafka)
+	t := time.NewTicker(10 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		lags, err := adm.Lag(ctx, s.cfg.Group)
+		if err != nil {
+			s.log.Debug("consumer lag unavailable", "err", err)
+			continue
+		}
+		l, ok := lags[s.cfg.Group]
+		if !ok || l.DescribeErr != nil || l.FetchErr != nil {
+			continue
+		}
+		member, _ := s.kafka.GroupMetadata()
+		s.lag.Reset()
+		for p, ml := range l.Lag[s.cfg.Topic] {
+			if ml.Err == nil && ml.Lag >= 0 && ml.Member != nil && ml.Member.MemberID == member {
+				s.lag.WithLabelValues(strconv.Itoa(int(p))).Set(float64(ml.Lag))
+			}
+		}
 	}
 }
 

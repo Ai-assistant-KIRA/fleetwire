@@ -82,8 +82,9 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		GapSeqs: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_ingest_gap_seqs_total",
 			Help: "Seqs recorded as device-reported gaps."}),
 		E2EDelay: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "fleetwire_ingest_e2e_delay_seconds",
-			Help:    "Time from collection on the device (device clock) to commit, per newly stored reading.",
-			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}}),
+			Help: "Time from collection on the device (device clock) to commit, per newly stored reading.",
+			// Fine around the 5 s objective, so p99 estimates there mean something.
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10, 30, 60}}),
 		TxSeconds: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "fleetwire_ingest_tx_seconds",
 			Help: "Duration of one batch transaction.", Buckets: prometheus.ExponentialBuckets(0.001, 2, 14)}),
 		Skew: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "fleetwire_ingest_clock_skew_seconds",
