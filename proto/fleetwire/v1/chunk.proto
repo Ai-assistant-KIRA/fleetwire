@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package fleetwire.v1;
+
+option go_package = "github.com/Ai-assistant-KIRA/fleetwire/internal/gen/fleetwirev1;fleetwirev1";
+
+// ChunkPayload is the plaintext of one encrypted chunk row in PostgreSQL.
+// It never leaves the backend unencrypted except through the API and exports.
+message ChunkPayload {
+  repeated StoredReading readings = 1;
+}
+
+// StoredReading is a reading with its seq made explicit, because a chunk
+// covers a seq range that is not tied to any one uplink batch.
+message StoredReading {
+  uint64 seq = 1;
+  int64 collected_unix_nano = 2;
+  string collector = 3;
+  string metric = 4;
+  double value = 5;
+  map<string, string> labels = 6;
+}

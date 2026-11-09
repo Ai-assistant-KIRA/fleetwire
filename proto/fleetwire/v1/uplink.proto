@@ -1,0 +1,63 @@
+syntax = "proto3";
+
+package fleetwire.v1;
+
+option go_package = "github.com/Ai-assistant-KIRA/fleetwire/internal/gen/fleetwirev1;fleetwirev1";
+
+// Batch is one MQTT uplink message from a device, published on
+// fw/v1/d/{device_id}/up.
+//
+// Sequence numbers are not stored per reading. Reading i has seq
+// first_seq + i, so a batch always covers one unbroken seq range.
+message Batch {
+  // Wire schema version. Ingest accepts only 1.
+  uint32 schema_version = 1;
+  // Seq of readings[0]. At least 1.
+  uint64 first_seq = 2;
+  repeated Reading readings = 3;
+  // Gaps the device has not yet seen covered by an ack.
+  repeated Gap gaps = 4;
+  // Device clock at publish time, used to estimate clock skew.
+  int64 sent_unix_nano = 5;
+  string agent_version = 6;
+}
+
+// Reading is one measurement.
+message Reading {
+  // Device clock, UTC, nanoseconds since the Unix epoch.
+  int64 collected_unix_nano = 1;
+  // Collector that produced the value, for example "cpu" or "thermal".
+  string collector = 2;
+  // Metric name, for example "cpu.utilization".
+  string metric = 3;
+  double value = 4;
+  map<string, string> labels = 5;
+}
+
+// Gap is a seq range the device will never send.
+message Gap {
+  // Inclusive.
+  uint64 from_seq = 1;
+  // Inclusive.
+  uint64 to_seq = 2;
+  GapReason reason = 3;
+}
+
+// GapReason says why the device gave up on a seq range.
+enum GapReason {
+  GAP_REASON_UNSPECIFIED = 0;
+  // The local log reached its disk budget and dropped its oldest segment.
+  GAP_REASON_DISK_BUDGET = 1;
+  // A segment in the middle of the local log was unreadable.
+  GAP_REASON_CORRUPTION = 2;
+  // Seqs were handed out but their records are gone, for example because the
+  // local log directory was wiped while the state file survived.
+  GAP_REASON_LOST = 3;
+}
+
+// Ack is published by ingest, retained, on fw/v1/d/{device_id}/ack.
+message Ack {
+  // Every seq <= acked_through is stored or covered by a reported gap.
+  uint64 acked_through = 1;
+  int64 server_unix_nano = 2;
+}
