@@ -51,6 +51,8 @@ type Config struct {
 	SessionExpiry time.Duration
 	KeepAlive     time.Duration
 	// ReceiveMaximum caps unacknowledged messages the broker sends us.
+	// Zero means DefaultReceiveMaximum, never the protocol's 65,535: paho
+	// allocates a channel of that many packets per connection.
 	ReceiveMaximum uint16
 	// ManualAck: messages are acknowledged only when the caller acks them
 	// (paho sends PUBACKs strictly in arrival order).
@@ -66,6 +68,12 @@ type Config struct {
 	Logger    *slog.Logger
 	Metrics   *Metrics
 }
+
+// DefaultReceiveMaximum is sent when a Config sets none. paho.golang sizes
+// a per-connection channel by the receive maximum, and the protocol default
+// of 65,535 costs 512 KiB per connection: 5 GB for the load generator's
+// 10,000 devices, which receive only a few acks at a time.
+const DefaultReceiveMaximum = 64
 
 // Start begins connecting and keeps reconnecting until ctx ends.
 func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error) {
@@ -85,7 +93,6 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 	}
 	m := cfg.Metrics
 	expiry := uint32(cfg.SessionExpiry / time.Second)
-	recvMax := cfg.ReceiveMaximum
 	ac := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{u},
 		TlsCfg:                        cfg.TLS,
@@ -94,15 +101,7 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 		SessionExpiryInterval:         expiry,
 		ConnectTimeout:                20 * time.Second,
 		ReconnectBackoff:              cfg.Backoff.Delay,
-		ConnectPacketBuilder: func(c *paho.Connect, _ *url.URL) (*paho.Connect, error) {
-			if recvMax > 0 {
-				if c.Properties == nil {
-					c.Properties = &paho.ConnectProperties{}
-				}
-				c.Properties.ReceiveMaximum = &recvMax
-			}
-			return c, nil
-		},
+		ConnectPacketBuilder:          connectPacket(cfg.ReceiveMaximum),
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, ack *paho.Connack) {
 			if m != nil {
 				m.Connects.Inc()
@@ -150,4 +149,19 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 		return nil, fmt.Errorf("mqtt %s: %w", cfg.ClientID, err)
 	}
 	return cm, nil
+}
+
+// connectPacket returns the CONNECT builder: every connection states its
+// receive maximum, DefaultReceiveMaximum when the Config sets none.
+func connectPacket(recvMax uint16) func(*paho.Connect, *url.URL) (*paho.Connect, error) {
+	if recvMax == 0 {
+		recvMax = DefaultReceiveMaximum
+	}
+	return func(c *paho.Connect, _ *url.URL) (*paho.Connect, error) {
+		if c.Properties == nil {
+			c.Properties = &paho.ConnectProperties{}
+		}
+		c.Properties.ReceiveMaximum = &recvMax
+		return c, nil
+	}
 }
