@@ -178,6 +178,10 @@ func Run(ctx context.Context, o Options) ([]Row, error) {
 		return nil, fmt.Errorf("operator token: %w", err)
 	}
 	stamp := time.Now().UTC().Format("2006-01-02T150405Z")
+	// The commit is read once, before the first scenario: a run takes about
+	// an hour, and a checkout in the meantime must not rename the table or
+	// split it in two.
+	sha := gitSHA(ctx, o.RepoDir)
 	rawDir := filepath.Join(o.OutDir, "raw", stamp)
 	var rows []Row
 	for _, name := range o.Scenarios {
@@ -201,7 +205,7 @@ func Run(ctx context.Context, o Options) ([]Row, error) {
 		o.Log.Info("scenario done", "scenario", name, "pass", row.Pass, "missing", row.Missing, "duplicates", row.Duplicates, "recovery", row.Recovery)
 		// A scenario that could not run is a FAIL row, not an abort: the
 		// remaining scenarios still run.
-		if werr := writeResults(ctx, o, stamp, rows); werr != nil {
+		if werr := writeResults(o, stamp, sha, rows); werr != nil {
 			return rows, werr
 		}
 		if ctx.Err() != nil {

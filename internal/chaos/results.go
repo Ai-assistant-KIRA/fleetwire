@@ -79,11 +79,12 @@ func Table(rows []Row) string {
 	return b.String()
 }
 
-func writeResults(ctx context.Context, o Options, stamp string, rows []Row) error {
+// writeResults writes the table for the scenarios done so far. sha is the
+// commit the run started from (gitSHA).
+func writeResults(o Options, stamp, sha string, rows []Row) error {
 	if err := os.MkdirAll(o.OutDir, 0o750); err != nil {
 		return err
 	}
-	sha := gitSHA(ctx, o.RepoDir)
 	base := filepath.Join(o.OutDir, stamp+"-"+sha)
 	cmdline := fmt.Sprintf("fleetwire-chaos run -devices %d -interval %s -readings %d -wal-sync %s -scenario %s",
 		o.Devices, o.Interval, o.Readings, o.WALSync, strings.Join(o.Scenarios, ","))
