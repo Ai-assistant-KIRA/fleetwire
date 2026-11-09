@@ -40,7 +40,7 @@ type ingestConfig struct {
 	DBMaxConns   int32  `env:"FLEETWIRE_DATABASE_MAX_CONNS" flag:"database-max-conns" default:"20" help:"Connection pool size."`
 	Replication  int    `env:"FLEETWIRE_KAFKA_REPLICATION" flag:"kafka-replication" default:"3" help:"Replication factor for ensure-topics."`
 	Group        string `env:"FLEETWIRE_KAFKA_GROUP" flag:"kafka-group" default:"fleetwire-ingest" help:"Consumer group. With Charmed Kafka it must start with the relation's consumer-group-prefix."`
-	Workers      int    `env:"FLEETWIRE_INGEST_WORKERS" flag:"workers" default:"16" help:"Partitions processed in parallel."`
+	Workers      int    `env:"FLEETWIRE_INGEST_WORKERS" flag:"workers" default:"16" help:"Devices processed in parallel, one database transaction each; keep FLEETWIRE_DATABASE_MAX_CONNS above it."`
 	MQTTURL      string `env:"FLEETWIRE_MQTT_URL" flag:"mqtt-url" help:"Broker service listener for acks, for example tls://mosquitto:8884."`
 	MQTTCertFile string `env:"FLEETWIRE_MQTT_CERT_FILE" flag:"mqtt-cert" help:"Client certificate chain (CN fleetwire-ingest)."`
 	MQTTKeyFile  string `env:"FLEETWIRE_MQTT_KEY_FILE" flag:"mqtt-key" help:"Client private key."`

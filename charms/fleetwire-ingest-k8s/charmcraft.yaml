@@ -70,7 +70,7 @@ config:
     workers:
       type: int
       default: 16
-      description: Kafka partitions processed in parallel per unit.
+      description: Devices processed in parallel per unit, one database transaction each.
     log-level:
       type: string
       default: info

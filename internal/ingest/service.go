@@ -146,14 +146,10 @@ func (s *Service) Run(ctx context.Context) error {
 			s.log.Warn("kafka fetch error", "topic", topic, "partition", p, "err", err)
 		})
 		var all []*kgo.Record
-		var parts []kgo.FetchTopicPartition
 		fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-			if len(p.Records) > 0 {
-				parts = append(parts, p)
-				all = append(all, p.Records...)
-			}
+			all = append(all, p.Records...)
 		})
-		if err := s.processPartitions(ctx, parts); err != nil {
+		if err := s.processRecords(ctx, all); err != nil {
 			// Shutting down mid-poll: nothing is committed, so the records
 			// are delivered again to whoever owns the partitions next.
 			s.kafka.AllowRebalance()
@@ -206,18 +202,40 @@ func (s *Service) reportLag(ctx context.Context) {
 	}
 }
 
-// processPartitions handles partitions in parallel and the records of one
-// partition in order. Order is not needed for correctness (R6.8); it keeps
-// the device row lock uncontended in the common case.
-func (s *Service) processPartitions(ctx context.Context, parts []kgo.FetchTopicPartition) error {
+// byDevice splits records by key (the bridge keys them by device ID). Each
+// group keeps the arrival order of its records, and the groups come in the
+// order their first record arrived.
+func byDevice(records []*kgo.Record) [][]*kgo.Record {
+	index := make(map[string]int)
+	var groups [][]*kgo.Record
+	for _, r := range records {
+		i, ok := index[string(r.Key)]
+		if !ok {
+			i = len(groups)
+			index[string(r.Key)] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], r)
+	}
+	return groups
+}
+
+// processRecords handles the records of one poll: the records of one device
+// (the record key) in order, different devices in parallel on up to Workers
+// goroutines. Order is not needed for correctness (R6.8); keeping each
+// device's records in order keeps its row lock uncontended. Running a
+// partition's records one after another instead capped ingest at
+// partitions / transaction time: about 1,000 batches/s with 24 partitions
+// on the test VM, and 300 at 10,000 devices once transactions slowed down.
+func (s *Service) processRecords(ctx context.Context, records []*kgo.Record) error {
 	sem := make(chan struct{}, s.cfg.Workers)
 	var wg sync.WaitGroup
 	var failed atomic.Bool
-	for _, p := range parts {
+	for _, recs := range byDevice(records) {
 		sem <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-sem }()
-			for _, r := range p.Records {
+			for _, r := range recs {
 				if err := s.handle(ctx, r); err != nil {
 					failed.Store(true)
 					return
