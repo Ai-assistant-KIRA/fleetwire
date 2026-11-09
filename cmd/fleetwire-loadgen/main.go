@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/pprof" //nolint:gosec // G108: served only with -pprof, on the private metrics listener
 	"os"
 	"os/signal"
 	"strconv"
@@ -65,6 +66,7 @@ func run(args []string) error {
 	fs.Int64Var(&o.WALMaxSize, "wal-max-size", 0, "wal.max-size in bytes (0: default).")
 	fs.DurationVar(&o.DrainTimeout, "drain-timeout", 3*time.Minute, "How long to wait for acks after collection stops.")
 	metrics := fs.String("metrics-listen", "", "Serve Prometheus metrics here, for example 172.31.250.1:9466.")
+	profile := fs.Bool("pprof", false, "Also serve net/http/pprof on the metrics listener, to profile the load generator itself.")
 	level := fs.String("log-level", "warn", "Log level.")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -101,6 +103,13 @@ func run(args []string) error {
 		}
 		mux := http.NewServeMux()
 		mux.Handle("GET /metrics", promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
+		if *profile {
+			mux.HandleFunc("GET /debug/pprof/", pprof.Index)
+			mux.HandleFunc("GET /debug/pprof/cmdline", pprof.Cmdline)
+			mux.HandleFunc("GET /debug/pprof/profile", pprof.Profile)
+			mux.HandleFunc("GET /debug/pprof/symbol", pprof.Symbol)
+			mux.HandleFunc("GET /debug/pprof/trace", pprof.Trace)
+		}
 		srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 		go func() { _ = srv.Serve(ln) }()
 		defer func() { _ = srv.Close() }()
