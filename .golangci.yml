@@ -45,10 +45,17 @@ linters:
       check-type-assertions: true
     exhaustive:
       default-signifies-exhaustive: true
+    misspell:
+      locale: US
+      ignore-rules:
+        - mosquitto
     gocritic:
       enabled-tags: [diagnostic, performance]
       disabled-checks:
+        # Copying row structs of a few hundred bytes is cheap next to the
+        # database round trip that produced them, and value loops read better.
         - hugeParam
+        - rangeValCopy
     gosec:
       excludes:
         # G115 (integer overflow on conversion) fires on every uint64<->int64
