@@ -1,0 +1,68 @@
+name: mosquitto-k8s
+type: charm
+title: Mosquitto for fleetwire
+summary: Eclipse Mosquitto with the two mutual-TLS listeners and the ACLs fleetwire needs.
+description: |
+  Runs Eclipse Mosquitto in a Pebble-managed container with two listeners:
+  8883 for devices (device CA chain, CRL checked) and 8884 for the fleetwire
+  services (service CA chain). Usernames are certificate common names and
+  the ACL pins every device to its own topics.
+
+  The device CRL comes from fleetwire-api-k8s over fleetwire_crl. The charm
+  fetches it on every update-status hook and when the relation changes, and
+  reloads Mosquitto with SIGHUP when it differs. Server certificates and CA
+  chains arrive in a Juju user secret; set its ID in the pki-secret option.
+links:
+  source: https://github.com/Ai-assistant-KIRA/fleetwire
+  documentation: https://github.com/Ai-assistant-KIRA/fleetwire/blob/main/docs/how-to/deploy-with-juju.md
+
+base: ubuntu@24.04
+platforms:
+  amd64:
+
+parts:
+  charm:
+    plugin: charm
+    source: .
+
+containers:
+  mosquitto:
+    resource: mosquitto-image
+    mounts:
+      - storage: data
+        location: /mosquitto/data
+
+resources:
+  mosquitto-image:
+    type: oci-image
+    description: Eclipse Mosquitto 2.x image.
+    upstream-source: eclipse-mosquitto:2.1.2-alpine
+
+storage:
+  data:
+    type: filesystem
+    description: Persistent sessions and queued messages.
+    minimum-size: 1G
+
+provides:
+  mqtt:
+    interface: fleetwire_mqtt
+
+requires:
+  crl:
+    interface: fleetwire_crl
+    limit: 1
+
+config:
+  options:
+    pki-secret:
+      type: string
+      description: |
+        ID of a Juju user secret with the keys tls-cert and tls-key (the
+        broker certificate), device-trust (device CA chain), service-trust
+        (service CA chain) and ca-bundle (the CA that signed the API
+        certificate, to fetch the CRL).
+    max-queued-messages:
+      type: int
+      default: 1000000
+      description: Messages queued per offline persistent session, such as a stopped bridge's share.
