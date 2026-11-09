@@ -106,10 +106,14 @@ func New(t *testing.T, opts ...Option) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The listeners exist before the API is built, so the URL handed to
+	// devices at enrollment is the real one and renewal can reach it.
+	h.Public = httptest.NewUnstartedServer(nil)
+	h.Device = httptest.NewUnstartedServer(nil)
 	cfg := api.Config{
 		CABundlePEM:  bundle,
 		BrokerURL:    "tls://broker.test:8883",
-		DeviceAPIURL: "https://api.test:8444",
+		DeviceAPIURL: "https://" + h.Device.Listener.Addr().String(),
 		ExportDir:    h.ExportDir,
 		// High defaults so tests that are not about rate limits never hit them.
 		RatePerSecond: 10_000, RateBurst: 10_000, EnrollPerSecond: 10_000, EnrollBurst: 10_000,
@@ -122,11 +126,11 @@ func New(t *testing.T, opts ...Option) *Harness {
 	h.Worker = jobs.NewWorker(jobs.Config{Workers: 0, ExportDir: h.ExportDir, WorkerID: "test-" + uuid.NewString()[:8]},
 		jobs.Deps{DB: h.DB, Keyring: h.Keyring, Keys: h.Keys, CRL: h.CRL, Log: log, Registry: h.Registry})
 
-	h.Public = httptest.NewUnstartedServer(srv.PublicHandler())
+	h.Public.Config.Handler = srv.PublicHandler()
 	h.Public.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12}
 	h.Public.StartTLS()
 	t.Cleanup(h.Public.Close)
-	h.Device = httptest.NewUnstartedServer(srv.DeviceHandler())
+	h.Device.Config.Handler = srv.DeviceHandler()
 	h.Device.TLS = &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12,
 		ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: deviceCAs}
 	h.Device.StartTLS()
