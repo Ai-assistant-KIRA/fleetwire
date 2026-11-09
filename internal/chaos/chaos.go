@@ -29,6 +29,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/backoff"
 )
 
 // Options for a chaos run.
@@ -222,6 +224,10 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 	if err := r.waitHealthy(ctx, 5*time.Minute); err != nil {
 		return row, err
 	}
+	// Start from a clean network whatever an earlier scenario left behind.
+	if err := r.toxi(ctx, http.MethodPost, "/reset", ""); err != nil {
+		return row, fmt.Errorf("reset toxiproxy: %w", err)
+	}
 	if err := r.newTenant(ctx, sc.name); err != nil {
 		return row, err
 	}
@@ -407,7 +413,29 @@ func (r *run) check(ctx context.Context, row Row) (Row, error) {
 	return row, nil
 }
 
+// toxi calls the Toxiproxy API and retries for about a minute. A fault
+// that is never removed would break every later scenario, and under load
+// a reused keep-alive connection can fail with EOF. Retrying is safe:
+// setting a proxy's state is idempotent, adding a toxic that already exists
+// answers 409, and deleting one that is gone answers 404; both count as done.
 func (r *run) toxi(ctx context.Context, method, path, body string) error {
+	bo := backoff.Backoff{Base: 500 * time.Millisecond, Max: 5 * time.Second}
+	var err error
+	for attempt := range 20 {
+		if err = r.toxiOnce(ctx, method, path, body); err == nil {
+			return nil
+		}
+		r.o.Log.Warn("toxiproxy call failed; retrying", "method", method, "path", path, "attempt", attempt, "err", err)
+		if backoff.Sleep(ctx, bo.Delay(attempt)) != nil {
+			break
+		}
+	}
+	return err
+}
+
+func (r *run) toxiOnce(ctx context.Context, method, path, body string) error {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, r.o.ToxiproxyURL+path, strings.NewReader(body))
 	if err != nil {
 		return err
@@ -418,11 +446,15 @@ func (r *run) toxi(ctx context.Context, method, path, body string) error {
 		return fmt.Errorf("toxiproxy %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("toxiproxy %s %s: HTTP %d: %s", method, path, resp.StatusCode, b)
+	switch {
+	case resp.StatusCode < 300:
+		return nil
+	case method == http.MethodPost && resp.StatusCode == http.StatusConflict,
+		method == http.MethodDelete && resp.StatusCode == http.StatusNotFound:
+		return nil
 	}
-	return nil
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	return fmt.Errorf("toxiproxy %s %s: HTTP %d: %s", method, path, resp.StatusCode, b)
 }
 
 type psEntry struct {
