@@ -71,3 +71,24 @@ func TestMarkdown(t *testing.T) {
 		}
 	}
 }
+
+type Shared struct {
+	Level string `env:"T_LEVEL" flag:"level" default:"info" help:"Level."`
+}
+
+type withEmbedded struct {
+	Shared
+	Name string `env:"T_NAME" flag:"name" default:"x" help:"Name."`
+}
+
+func TestEmbeddedStructsAndEmptyEnv(t *testing.T) {
+	t.Setenv("T_LEVEL", "debug")
+	t.Setenv("T_NAME", "")
+	var c withEmbedded
+	if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil); err != nil {
+		t.Fatal(err)
+	}
+	if c.Level != "debug" || c.Name != "x" {
+		t.Fatalf("loaded %+v: embedded field not read, or empty env replaced the default", c)
+	}
+}

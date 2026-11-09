@@ -57,11 +57,20 @@ func fields(cfg any) ([]field, error) {
 	if v.Kind() != reflect.Pointer || v.Elem().Kind() != reflect.Struct {
 		return nil, errors.New("config: Load needs a pointer to a struct")
 	}
-	v = v.Elem()
+	return structFields(v.Elem()), nil
+}
+
+// structFields lists tagged fields, descending into embedded structs so
+// that shared settings (svc.Common) are loaded like the service's own.
+func structFields(v reflect.Value) []field {
 	t := v.Type()
 	var out []field
 	for i := 0; i < t.NumField(); i++ {
 		sf := t.Field(i)
+		if sf.Anonymous && sf.Type.Kind() == reflect.Struct && sf.IsExported() {
+			out = append(out, structFields(v.Field(i))...)
+			continue
+		}
 		if !sf.IsExported() || (sf.Tag.Get("env") == "" && sf.Tag.Get("flag") == "") {
 			continue
 		}
@@ -76,7 +85,7 @@ func fields(cfg any) ([]field, error) {
 			secret:   sf.Tag.Get("secret") == "true",
 		})
 	}
-	return out, nil
+	return out
 }
 
 // Load fills cfg from defaults, then the environment, then args (flags win).
@@ -91,7 +100,9 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 		if f.def != "" {
 			raw[f.name] = f.def
 		}
-		if v, ok := os.LookupEnv(f.env); ok && f.env != "" {
+		// An empty variable counts as unset, so `FOO=` in a Compose file
+		// or a shell does not wipe out a default.
+		if v := os.Getenv(f.env); v != "" && f.env != "" {
 			raw[f.name], set[f.name] = v, true
 		}
 	}
