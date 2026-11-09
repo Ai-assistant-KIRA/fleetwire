@@ -1,0 +1,197 @@
+package api
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/chunks"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
+)
+
+var metricRE = regexp.MustCompile(`^[a-z0-9_.]{1,64}$`)
+
+// listReadings decrypts the device's chunks that overlap [from, to] and
+// returns readings in seq order, which is the order they were collected.
+// The cursor holds the last seq returned and is bound to the query.
+func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
+	device, e := pathID(r)
+	if e != nil {
+		return e
+	}
+	q := r.URL.Query()
+	to := s.now().UTC()
+	from := to.Add(-24 * time.Hour)
+	var problems []string
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			problems = append(problems, "to must be RFC 3339")
+		}
+		to = t
+	}
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			problems = append(problems, "from must be RFC 3339")
+		}
+		from = t
+	}
+	metric := q.Get("metric")
+	if metric != "" && !metricRE.MatchString(metric) {
+		problems = append(problems, "metric must match ^[a-z0-9_.]{1,64}$")
+	}
+	if len(problems) == 0 && from.After(to) {
+		problems = append(problems, "from must not be after to")
+	}
+	limit, le := limitParam(r, 1000, 10_000)
+	if le != nil {
+		problems = append(problems, le.detail)
+	}
+	if len(problems) > 0 {
+		return errBadRequest("invalid readings query", problems...)
+	}
+	// The cursor carries the window it was issued for: with the default
+	// window ("the last 24 hours"), "now" moves between pages.
+	type cursor struct {
+		AfterSeq uint64 `json:"s"`
+		From     int64  `json:"f"`
+		To       int64  `json:"t"`
+		Metric   string `json:"m"`
+	}
+	scope := fmt.Sprintf("readings:%s:%s", p.tenant, device)
+	var cur cursor
+	if c := q.Get("cursor"); c != "" {
+		if err := s.cur.decode(scope, c, &cur); err != nil {
+			return errBadRequest("invalid cursor")
+		}
+		explicit := (q.Get("from") != "" && from.UnixNano() != cur.From) ||
+			(q.Get("to") != "" && to.UnixNano() != cur.To) || (metric != "" && metric != cur.Metric)
+		if explicit {
+			return errBadRequest("the cursor belongs to a different query")
+		}
+		from, to, metric = time.Unix(0, cur.From).UTC(), time.Unix(0, cur.To).UTC(), cur.Metric
+	}
+
+	err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
+		_, err := tx.GetDevice(ctx, device)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return errNotFound("device")
+	}
+	if err != nil {
+		return s.internal(r, err)
+	}
+
+	const batch = 50
+	out := page[readingJSON]{Items: make([]readingJSON, 0, min(limit, 1024))}
+	after := cur.AfterSeq
+	for full := false; !full; {
+		var list []store.Chunk
+		// Short transactions: decryption happens outside, so a slow page
+		// never holds a database connection.
+		err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			list, err = tx.ChunksInWindow(ctx, device, from, to, after, batch)
+			return err
+		})
+		if err != nil {
+			return s.internal(r, err)
+		}
+		for _, c := range list {
+			dek, err := s.keys.Key(r.Context(), p.tenant, c.KeyID)
+			if err != nil {
+				return s.internal(r, err)
+			}
+			readings, err := chunks.Open(dek, c)
+			if err != nil {
+				return s.internal(r, err)
+			}
+			for _, rd := range readings {
+				if rd.GetSeq() <= after {
+					continue
+				}
+				at := time.Unix(0, rd.GetCollectedUnixNano()).UTC()
+				if at.Before(from) || at.After(to) || (metric != "" && rd.GetMetric() != metric) {
+					continue
+				}
+				out.Items = append(out.Items, readingJSON{Seq: rd.GetSeq(), CollectedAt: at, Collector: rd.GetCollector(),
+					Metric: rd.GetMetric(), Value: rd.GetValue(), Labels: rd.GetLabels()})
+				if len(out.Items) == limit {
+					full = true
+					after = rd.GetSeq()
+					break
+				}
+			}
+			if full {
+				break
+			}
+			after = c.SeqHi
+		}
+		if len(list) < batch {
+			break
+		}
+	}
+	if len(out.Items) == limit {
+		c, err := s.cur.encode(scope, cursor{AfterSeq: after, From: from.UnixNano(), To: to.UnixNano(), Metric: metric})
+		if err != nil {
+			return s.internal(r, err)
+		}
+		out.NextCursor = c
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
+
+func (s *Server) listGaps(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
+	device, e := pathID(r)
+	if e != nil {
+		return e
+	}
+	limit, e := limitParam(r, 100, 1000)
+	if e != nil {
+		return e
+	}
+	type cursor struct {
+		AfterFrom uint64 `json:"f"`
+	}
+	scope := "gaps:" + p.tenant.String() + ":" + device.String()
+	var cur cursor
+	if c := r.URL.Query().Get("cursor"); c != "" {
+		if err := s.cur.decode(scope, c, &cur); err != nil {
+			return errBadRequest("invalid cursor")
+		}
+	}
+	var gaps []store.DeviceGap
+	err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
+		if _, err := tx.GetDevice(ctx, device); err != nil {
+			return err
+		}
+		var err error
+		gaps, err = tx.ListGaps(ctx, device, cur.AfterFrom, limit)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) {
+		return errNotFound("device")
+	}
+	if err != nil {
+		return s.internal(r, err)
+	}
+	out := page[gapJSON]{Items: make([]gapJSON, 0, len(gaps))}
+	for _, g := range gaps {
+		out.Items = append(out.Items, gapJSON{FromSeq: g.FromSeq, ToSeq: g.ToSeq, Reason: g.Reason, ReportedAt: g.ReportedAt})
+	}
+	if len(gaps) == limit {
+		c, err := s.cur.encode(scope, cursor{AfterFrom: gaps[len(gaps)-1].FromSeq})
+		if err != nil {
+			return s.internal(r, err)
+		}
+		out.NextCursor = c
+	}
+	writeJSON(w, http.StatusOK, out)
+	return nil
+}
