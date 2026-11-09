@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -42,8 +43,10 @@ type Config struct {
 	TLS            *tls.Config
 	ShareGroup     string
 	ReceiveMaximum uint16
-	Brokers        []string
-	Topic          string
+	// Kafka holds the connection options (brokers, SASL, TLS) from
+	// svc.Kafka.KafkaOpts; the producer settings are added here.
+	Kafka []kgo.Opt
+	Topic string
 	// ReadyAfter: readiness fails when messages are pending and no write
 	// has succeeded for this long (default 10 s).
 	ReadyAfter time.Duration
@@ -99,8 +102,7 @@ func New(cfg Config, log *slog.Logger, reg prometheus.Registerer) (*Bridge, erro
 	for _, r := range []string{"ok", "error", "rejected"} {
 		b.m.forwarded.WithLabelValues(r)
 	}
-	cl, err := kgo.NewClient(
-		kgo.SeedBrokers(cfg.Brokers...),
+	cl, err := kgo.NewClient(append(slices.Clip(cfg.Kafka),
 		kgo.ClientID(cfg.ClientID),
 		kgo.DefaultProduceTopic(cfg.Topic),
 		// acks=all and idempotence are the franz-go defaults; stated here
@@ -111,7 +113,7 @@ func New(cfg Config, log *slog.Logger, reg prometheus.Registerer) (*Bridge, erro
 		kgo.ProduceRequestTimeout(30*time.Second),
 		kgo.MaxBufferedBytes(64<<20),
 		kgo.MaxBufferedRecords(10_000),
-	)
+	)...)
 	if err != nil {
 		return nil, fmt.Errorf("kafka client: %w", err)
 	}

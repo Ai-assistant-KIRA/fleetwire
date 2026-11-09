@@ -124,6 +124,12 @@ func (m *Manager) SealingKey(ctx context.Context, tenant uuid.UUID) (uuid.UUID, 
 		default:
 			a = &active{keyID: k.KeyID, createdAt: k.CreatedAt, sealsAtLoad: k.SealCount}
 			if !m.needsRotation(a) {
+				// The key is usually still cached, so a refresh of the active
+				// key every minute does not call a remote keyring.
+				if dek, ok := m.deks.Get(k.KeyID); ok && k.WrappedDEK != nil && k.DestroyedAt == nil {
+					a.dek = dek
+					return nil
+				}
 				a.dek, err = m.unwrap(ctx, k)
 				return err
 			}

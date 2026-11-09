@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/backoff"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/crypto/keyring"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/kafkahdr"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/tenantkey"
@@ -36,7 +38,9 @@ const (
 
 // Config is the ingest service's settings.
 type Config struct {
-	Brokers    []string
+	// Kafka holds the connection options (brokers, SASL, TLS) from
+	// svc.Kafka.KafkaOpts; the consumer settings are added here.
+	Kafka      []kgo.Opt
 	Topic      string
 	DLQ        string
 	Group      string
@@ -91,20 +95,19 @@ func New(cfg Config, db *store.DB, keys *tenantkey.Manager, log *slog.Logger, re
 	reg.MustRegister(s.lag)
 	s.acks = NewAckPublisher(AckConfig{MQTTURL: cfg.MQTTURL, ClientID: "fleetwire-ingest-" + cfg.InstanceID,
 		TLS: cfg.TLS, Workers: cfg.AckWorkers}, log, reg)
-	opts := []kgo.Opt{
-		kgo.SeedBrokers(cfg.Brokers...),
-		kgo.ClientID("fleetwire-ingest-" + cfg.InstanceID),
+	opts := append(slices.Clip(cfg.Kafka),
+		kgo.ClientID("fleetwire-ingest-"+cfg.InstanceID),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.ConsumeTopics(cfg.Topic),
 		// Offsets are committed only after the database commit (R6.4).
 		kgo.DisableAutoCommit(),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
-		kgo.FetchMaxWait(500 * time.Millisecond),
-		kgo.SessionTimeout(30 * time.Second),
-		kgo.RebalanceTimeout(5 * time.Minute),
+		kgo.FetchMaxWait(500*time.Millisecond),
+		kgo.SessionTimeout(30*time.Second),
+		kgo.RebalanceTimeout(5*time.Minute),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
-	}
+	)
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
 		return nil, fmt.Errorf("kafka client: %w", err)
@@ -239,9 +242,11 @@ func (s *Service) handle(ctx context.Context, r *kgo.Record) error {
 			s.log.Error("exclusion constraint rejected a chunk; sending the batch to the DLQ (bug signal, the device will resend)", "device_id", device, "err", err)
 			span.SetStatus(codes.Error, "overlap")
 			return s.deadLetter(ctx, r, "exclusion_violation", err.Error())
-		case store.IsTransient(err):
+		case store.IsTransient(err), errors.Is(err, keyring.ErrUnavailable):
+			// Outages of the database or the API's keyring delay batches;
+			// they never send them to the dead-letter topic.
 			if attempt%20 == 0 {
-				s.log.Warn("database unavailable; retrying the batch", "device_id", device, "attempt", attempt, "err", err)
+				s.log.Warn("database or keyring unavailable; retrying the batch", "device_id", device, "attempt", attempt, "err", err)
 			}
 		default:
 			permanentFailures++
@@ -299,9 +304,10 @@ func (s *Service) Ready(context.Context) error {
 	return nil
 }
 
-// EnsureTopics creates the uplink and DLQ topics if they do not exist.
-func EnsureTopics(ctx context.Context, brokers []string, replication int16, log *slog.Logger) error {
-	cl, err := kgo.NewClient(kgo.SeedBrokers(brokers...))
+// EnsureTopics creates the uplink and DLQ topics if they do not exist. conn
+// holds the connection options from svc.Kafka.KafkaOpts.
+func EnsureTopics(ctx context.Context, conn []kgo.Opt, replication int16, log *slog.Logger) error {
+	cl, err := kgo.NewClient(conn...)
 	if err != nil {
 		return fmt.Errorf("kafka client: %w", err)
 	}

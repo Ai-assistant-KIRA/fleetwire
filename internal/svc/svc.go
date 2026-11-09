@@ -99,15 +99,27 @@ func BrokerTLS(brokerURL, certFile, keyFile, caFile string) (*tls.Config, error)
 	if err != nil {
 		return nil, fmt.Errorf("broker url: %w", err)
 	}
+	cfg, err := ClientTLS(certFile, keyFile, caFile)
+	if err != nil {
+		return nil, fmt.Errorf("broker: %w", err)
+	}
+	// The MQTT client dials a bare address, so the name to verify is set here.
+	cfg.ServerName = u.Hostname()
+	return cfg, nil
+}
+
+// ClientTLS builds a mutual-TLS client config from PEM files: the service's
+// certificate chain and key, and the CA bundle that signed the server.
+func ClientTLS(certFile, keyFile, caFile string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("load broker client certificate: %w", err)
+		return nil, fmt.Errorf("load client certificate: %w", err)
 	}
 	roots, err := pki.CertPool(caFile)
 	if err != nil {
 		return nil, err
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, RootCAs: roots, ServerName: u.Hostname()}, nil
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, RootCAs: roots}, nil
 }
 
 // Healthcheck asks the local admin server's /readyz and fails unless it

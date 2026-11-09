@@ -161,7 +161,7 @@ func (l *Local) Create(_ context.Context, tenantID uuid.UUID) error {
 }
 
 func (l *Local) load(tenantID uuid.UUID) (kek []byte, kekID uuid.UUID, err error) {
-	data, err := os.ReadFile(l.path(tenantID))
+	data, err := os.ReadFile(l.path(tenantID)) //nolint:gosec // G703: the file name is a formatted UUID, which has no path separator
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, uuid.Nil, ErrNotFound
 	}

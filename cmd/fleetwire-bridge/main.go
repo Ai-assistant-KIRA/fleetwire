@@ -23,13 +23,13 @@ import (
 
 type bridgeConfig struct {
 	svc.Common
-	MQTTURL      string   `env:"FLEETWIRE_MQTT_URL" flag:"mqtt-url" required:"true" help:"Broker service listener, for example tls://mosquitto:8884."`
-	MQTTCertFile string   `env:"FLEETWIRE_MQTT_CERT_FILE" flag:"mqtt-cert" required:"true" help:"Client certificate chain (CN fleetwire-bridge)."`
-	MQTTKeyFile  string   `env:"FLEETWIRE_MQTT_KEY_FILE" flag:"mqtt-key" required:"true" help:"Client private key."`
-	MQTTCAFile   string   `env:"FLEETWIRE_MQTT_CA_FILE" flag:"mqtt-ca" required:"true" help:"CA bundle that signed the broker certificate."`
-	Brokers      []string `env:"FLEETWIRE_KAFKA_BROKERS" flag:"kafka-brokers" required:"true" help:"Comma-separated Kafka bootstrap brokers."`
-	Instance     string   `env:"FLEETWIRE_INSTANCE_ID" flag:"instance-id" help:"Stable instance name; the MQTT client ID is fleetwire-bridge-<instance>. Default: host name."`
-	Receive      int      `env:"FLEETWIRE_BRIDGE_RECEIVE_MAXIMUM" flag:"receive-maximum" default:"1000" help:"Messages the broker may send before the bridge acks."`
+	svc.Kafka
+	MQTTURL      string `env:"FLEETWIRE_MQTT_URL" flag:"mqtt-url" required:"true" help:"Broker service listener, for example tls://mosquitto:8884."`
+	MQTTCertFile string `env:"FLEETWIRE_MQTT_CERT_FILE" flag:"mqtt-cert" required:"true" help:"Client certificate chain (CN fleetwire-bridge)."`
+	MQTTKeyFile  string `env:"FLEETWIRE_MQTT_KEY_FILE" flag:"mqtt-key" required:"true" help:"Client private key."`
+	MQTTCAFile   string `env:"FLEETWIRE_MQTT_CA_FILE" flag:"mqtt-ca" required:"true" help:"CA bundle that signed the broker certificate."`
+	Instance     string `env:"FLEETWIRE_INSTANCE_ID" flag:"instance-id" help:"Stable instance name; the MQTT client ID is fleetwire-bridge-<instance>. Default: host name."`
+	Receive      int    `env:"FLEETWIRE_BRIDGE_RECEIVE_MAXIMUM" flag:"receive-maximum" default:"1000" help:"Messages the broker may send before the bridge acks."`
 }
 
 func main() {
@@ -82,9 +82,13 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	conn, err := cfg.KafkaOpts()
+	if err != nil {
+		return err
+	}
 	b, err := bridge.New(bridge.Config{
 		MQTTURL: cfg.MQTTURL, ClientID: "fleetwire-bridge-" + svc.InstanceID(cfg.Instance), TLS: tlsCfg,
-		ReceiveMaximum: uint16(cfg.Receive), Brokers: cfg.Brokers, Topic: ingest.UplinkTopic,
+		ReceiveMaximum: uint16(cfg.Receive), Kafka: conn, Topic: ingest.UplinkTopic,
 	}, rt.Log, rt.Registry)
 	if err != nil {
 		return err

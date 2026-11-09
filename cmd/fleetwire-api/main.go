@@ -17,6 +17,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -177,6 +179,24 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var internal *http.Server
+	if cfg.InternalListen != "" {
+		services, err := pki.CertPool(cfg.ServiceTrustFile)
+		if err != nil {
+			return err
+		}
+		internal = &http.Server{
+			Addr:    cfg.InternalListen,
+			Handler: keyring.NewServer(kr, log.With("listener", "internal"), "fleetwire-ingest"),
+			TLSConfig: &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12,
+				ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: services},
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      10 * time.Second,
+			IdleTimeout:       2 * time.Minute,
+			ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelWarn),
+		}
+	}
 	keys := tenantkey.New(db, kr, log)
 	pub := crl.NewPublisher(db, ca, cfg.CRLFile, log)
 	reg.MustRegister(prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -218,6 +238,21 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	g.Go(func() error { pub.Run(gctx, cfg.CRLInterval); return nil })
 	g.Go(func() error { return worker.Run(gctx) })
 	g.Go(func() error { return srv.Serve(gctx) })
+	if internal != nil {
+		g.Go(func() error {
+			log.Info("keyring listener started", "addr", cfg.InternalListen)
+			if err := internal.ListenAndServeTLS("", ""); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("keyring listener: %w", err)
+			}
+			return nil
+		})
+		g.Go(func() error {
+			<-gctx.Done()
+			sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), 10*time.Second)
+			defer cancel()
+			return internal.Shutdown(sctx)
+		})
+	}
 	err = g.Wait()
 	log.Info("stopped", "err", err)
 	if errors.Is(err, context.Canceled) {

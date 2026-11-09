@@ -18,8 +18,13 @@ type apiConfig struct {
 	PublicListen string `env:"FLEETWIRE_API_PUBLIC_LISTEN" flag:"public-listen" default:":8443" help:"Tenant and operator API listener (TLS)."`
 	DeviceListen string `env:"FLEETWIRE_API_DEVICE_LISTEN" flag:"device-listen" default:":8444" help:"Enrollment and renewal listener (TLS, client certificates requested)."`
 	AdminListen  string `env:"FLEETWIRE_API_ADMIN_LISTEN" flag:"admin-listen" default:"127.0.0.1:9090" help:"Health and metrics listener (plain HTTP; keep it private)."`
-	TLSCertFile  string `env:"FLEETWIRE_API_TLS_CERT_FILE" flag:"tls-cert" help:"Server certificate chain (PEM)."`
-	TLSKeyFile   string `env:"FLEETWIRE_API_TLS_KEY_FILE" flag:"tls-key" help:"Server private key (PEM)."`
+	// The keyring listener exists for deployments where ingest cannot share
+	// the keyring directory (separate pods): ingest wraps and unwraps data
+	// keys through it, and the KEKs never leave the API.
+	InternalListen   string `env:"FLEETWIRE_API_INTERNAL_LISTEN" flag:"internal-listen" help:"Keyring listener for ingest, mutual TLS with service certificates, for example :8445. Empty disables it."`
+	ServiceTrustFile string `env:"FLEETWIRE_SERVICE_TRUST_FILE" flag:"service-trust" help:"Service CA chain that verifies client certificates on the keyring listener."`
+	TLSCertFile      string `env:"FLEETWIRE_API_TLS_CERT_FILE" flag:"tls-cert" help:"Server certificate chain (PEM)."`
+	TLSKeyFile       string `env:"FLEETWIRE_API_TLS_KEY_FILE" flag:"tls-key" help:"Server private key (PEM)."`
 
 	DeviceTrustFile  string `env:"FLEETWIRE_DEVICE_TRUST_FILE" flag:"device-trust" help:"Device CA chain used to verify device client certificates."`
 	DeviceCACertFile string `env:"FLEETWIRE_DEVICE_CA_CERT_FILE" flag:"device-ca-cert" help:"Device Issuing CA certificate (signs device certificates and the CRL)."`
@@ -72,6 +77,9 @@ func (c *apiConfig) Validate() []error {
 		need(c.KeyringRootKeyFile, "FLEETWIRE_KEYRING_ROOT_KEY_FILE")
 		need(c.CRLFile, "FLEETWIRE_CRL_FILE")
 		need(c.ExportDir, "FLEETWIRE_EXPORT_DIR")
+		if c.InternalListen != "" {
+			need(c.ServiceTrustFile, "FLEETWIRE_SERVICE_TRUST_FILE (with FLEETWIRE_API_INTERNAL_LISTEN)")
+		}
 		if c.JobWorkers < 0 {
 			errs = append(errs, errors.New("FLEETWIRE_JOB_WORKERS must not be negative"))
 		}
