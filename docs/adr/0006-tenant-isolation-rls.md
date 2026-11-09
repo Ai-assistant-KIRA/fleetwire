@@ -21,15 +21,21 @@ the token ID.
   Once a placeholder setting has been used on a connection, PostgreSQL returns
   an empty string instead of NULL; without `NULLIF` every query on a reused
   pooled connection would fail with a cast error instead of matching nothing.
-- Services connect as `fleetwire_app` (`NOBYPASSRLS`, `NOINHERIT`, owns
-  nothing). At start they call `CheckRuntimeRole` and refuse to run as a role
-  that can bypass RLS or owns the tables.
+- The policies and grants name one **runtime role**. In Compose and the
+  tests it is `fleetwire_app` (`NOBYPASSRLS`, `NOINHERIT`, owns nothing),
+  created by the deployment. `fleetwire-api migrate` takes the name as a
+  parameter (`FLEETWIRE_DATABASE_RUNTIME_ROLE`), because Charmed PostgreSQL
+  cannot create roles for an application: there the runtime role is the
+  charm's `charmed_dml` group and the services log in as relation users that
+  belong to it (ADR-0012). Policies on a group apply to its members.
+- At start the services call `CheckRuntimeRole` and refuse to run as a role
+  that is a superuser, can bypass RLS, or owns the tables.
 - `store.InTenantTx` is the only way to reach tenant data. It runs
   `set_config('fleetwire.tenant_id', $1, true)`; the `true` makes it local to
   the transaction, so it cannot leak to the next borrower of the connection.
 - Pre-tenant lookups are SECURITY DEFINER functions owned by the migration
   role, with `search_path = pg_catalog, fleetwire, pg_temp`, `EXECUTE`
-  revoked from `PUBLIC` and granted to `fleetwire_app` only, each returning
+  revoked from `PUBLIC` and granted to the runtime role only, each returning
   the minimum columns. `device_for_ingest` also takes the device row lock.
 - Because RLS is forced, the owner is subject to it too. The owner gets an
   explicit permissive policy (`TO CURRENT_USER USING (true)`) instead of the
@@ -66,3 +72,8 @@ the token ID.
   tokens under concurrency.
 - The definer functions are a small, reviewed attack surface; adding one is a
   security-relevant change.
+- The isolation is against mistakes in tenant scoping, not against a
+  compromised service: any session of the runtime role can set
+  `fleetwire.tenant_id` to any tenant. What a compromised service cannot do
+  is alter the schema, drop the policies, or rewrite the audit log, because
+  it is not the owner.
