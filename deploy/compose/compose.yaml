@@ -135,7 +135,7 @@ services:
 
   migrate:
     <<: *service
-    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api}}
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api, VERSION: "${FW_VERSION:-dev}", COMMIT: "${FW_COMMIT:-unknown}"}}
     restart: "no"
     healthcheck: {disable: true}
     command: ["migrate"]
@@ -146,7 +146,7 @@ services:
 
   topics:
     <<: *service
-    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest}}
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest, VERSION: "${FW_VERSION:-dev}", COMMIT: "${FW_COMMIT:-unknown}"}}
     restart: "no"
     healthcheck: {disable: true}
     command: ["ensure-topics"]
@@ -159,7 +159,7 @@ services:
 
   api:
     <<: *service
-    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api}}
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-api, VERSION: "${FW_VERSION:-dev}", COMMIT: "${FW_COMMIT:-unknown}"}}
     command: ["serve"]
     environment:
       <<: *env
@@ -193,7 +193,7 @@ services:
 
   bridge-1: &bridge
     <<: *service
-    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-bridge}}
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-bridge, VERSION: "${FW_VERSION:-dev}", COMMIT: "${FW_COMMIT:-unknown}"}}
     hostname: bridge-1
     environment: &bridge-env
       <<: [*env, *mqtt-env]
@@ -211,7 +211,7 @@ services:
 
   ingest-1: &ingest
     <<: *service
-    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest}}
+    build: {context: ../.., dockerfile: Dockerfile, args: {BINARY: fleetwire-ingest, VERSION: "${FW_VERSION:-dev}", COMMIT: "${FW_COMMIT:-unknown}"}}
     hostname: ingest-1
     command: ["run"]
     environment:

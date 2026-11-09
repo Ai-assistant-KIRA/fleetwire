@@ -107,8 +107,9 @@ dev-ca: ## Create the development CA and certificates (idempotent, never overwri
 up: dev-ca ## Build the images and start the development stack
 	mkdir -p $(STATE)/keyring $(STATE)/crl $(STATE)/exports $(STATE)/mosquitto
 	@# Compose reads .env itself, so plain `docker compose` calls (the chaos
-	@# runner, a developer by hand) run the containers as the same user.
-	printf 'FW_UID=%s\nFW_GID=%s\n' "$(FW_UID)" "$(FW_GID)" > deploy/compose/.env
+	@# runner, a developer by hand) run the containers as the same user, and
+	@# the images report the build they came from in fleetwire_build_info.
+	printf 'FW_UID=%s\nFW_GID=%s\nFW_VERSION=%s\nFW_COMMIT=%s\n' "$(FW_UID)" "$(FW_GID)" "$(VERSION)" "$(COMMIT)" > deploy/compose/.env
 	[ -f $(STATE)/crl/crl.pem ] || cp $(SECRETS)/crl.pem $(STATE)/crl/crl.pem
 	$(COMPOSE) up -d --build --wait --wait-timeout 300
 
