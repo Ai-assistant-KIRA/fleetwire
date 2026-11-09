@@ -1,0 +1,17 @@
+[project]
+name = "fleetwire-charms"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+# Each charm has its own configuration.
+extend-exclude = ["fleetwire-api-k8s", "fleetwire-ingest-k8s", "fleetwire-bridge-k8s", "mosquitto-k8s"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "C4", "N", "D", "I", "B", "UP", "S", "SIM", "RUF", "PT"]
+ignore = ["D203", "D213", "D103", "S101"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

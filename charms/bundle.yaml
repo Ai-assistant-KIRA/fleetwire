@@ -1,0 +1,60 @@
+# fleetwire on Kubernetes: the four fleetwire charms with Charmed PostgreSQL
+# and Charmed Kafka. Build the local charms first (charmcraft pack in each
+# directory) and see docs/how-to/deploy-with-juju.md for the secrets.
+#
+#   juju deploy ./bundle.yaml --trust
+bundle: kubernetes
+name: fleetwire
+applications:
+  # A PostgreSQL for fleetwire alone: the runtime logins hold charmed_dml,
+  # which Charmed PostgreSQL grants on every database of the cluster.
+  postgresql-k8s:
+    charm: postgresql-k8s
+    channel: 16/stable
+    scale: 1
+    trust: true
+    options:
+      # The chunk overlap constraint (exclusion on a uuid and a range).
+      plugin-btree-gist-enable: true
+  kafka-k8s:
+    charm: kafka-k8s
+    channel: 4/stable
+    scale: 1
+    trust: true
+    # One unit acts as KRaft controller and broker, for a single VM.
+    options:
+      roles: broker,controller
+  fleetwire-api-k8s:
+    charm: ./fleetwire-api-k8s/fleetwire-api-k8s_amd64.charm
+    scale: 1
+    resources:
+      api-image: ghcr.io/ai-assistant-kira/fleetwire-api:0.1.0
+  fleetwire-ingest-k8s:
+    charm: ./fleetwire-ingest-k8s/fleetwire-ingest-k8s_amd64.charm
+    scale: 1
+    resources:
+      ingest-image: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.1.0
+    options:
+      # A one-broker Kafka cannot hold three replicas.
+      kafka-replication: 1
+  fleetwire-bridge-k8s:
+    charm: ./fleetwire-bridge-k8s/fleetwire-bridge-k8s_amd64.charm
+    scale: 1
+    resources:
+      bridge-image: ghcr.io/ai-assistant-kira/fleetwire-bridge:0.1.0
+  mosquitto-k8s:
+    charm: ./mosquitto-k8s/mosquitto-k8s_amd64.charm
+    scale: 1
+    resources:
+      mosquitto-image: eclipse-mosquitto:2.1.2-alpine
+relations:
+  # The API's schema owner (migrations) and its own runtime login.
+  - [fleetwire-api-k8s:database, postgresql-k8s:database]
+  - [fleetwire-api-k8s:runtime-database, postgresql-k8s:database]
+  - [fleetwire-ingest-k8s:database, postgresql-k8s:database]
+  - [fleetwire-ingest-k8s:kafka, kafka-k8s:kafka-client]
+  - [fleetwire-bridge-k8s:kafka, kafka-k8s:kafka-client]
+  - [fleetwire-ingest-k8s:api, fleetwire-api-k8s:ingest]
+  - [mosquitto-k8s:crl, fleetwire-api-k8s:crl]
+  - [fleetwire-ingest-k8s:mqtt, mosquitto-k8s:mqtt]
+  - [fleetwire-bridge-k8s:mqtt, mosquitto-k8s:mqtt]
