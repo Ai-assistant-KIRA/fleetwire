@@ -1,0 +1,676 @@
+openapi: 3.1.0
+info:
+  title: fleetwire API
+  version: 0.1.0
+  summary: Tenant, operator and device API of fleetwire.
+  description: |
+    Every error is an RFC 9457 problem (application/problem+json) with a
+    stable `code`. Lists are paged with opaque, signed cursors: pass
+    `next_cursor` back as `cursor`. Tenant tokens (`fwt_`) need the scope
+    named on each operation; operator tokens (`fwo_`) reach `/v1/admin`.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: https://localhost:8443
+    description: Public listener (tenant and operator API)
+  - url: https://localhost:8444
+    description: Device listener (enrollment and renewal)
+security:
+  - bearer: []
+tags:
+  - name: operator
+  - name: tenant
+  - name: devices
+  - name: readings
+  - name: exports
+  - name: audit
+  - name: device-identity
+
+paths:
+  /v1/admin/tenants:
+    post:
+      tags: [operator]
+      operationId: createTenant
+      summary: Create a tenant, its key-encryption key and first data key.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, minLength: 1, maxLength: 200}
+                retention_days: {type: integer, minimum: 1, maximum: 3650, default: 30}
+      responses:
+        "201": {$ref: "#/components/responses/Tenant201"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [operator]
+      operationId: listTenants
+      parameters: [{$ref: "#/components/parameters/limit1000"}, {$ref: "#/components/parameters/cursor"}]
+      responses:
+        "200":
+          description: Tenants by ID.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TenantPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/admin/tenants/{id}:
+    delete:
+      tags: [operator]
+      operationId: destroyTenant
+      summary: Destroy a tenant. Its keys go first, so every copy of its data becomes unreadable.
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/admin/tenants/{id}/tokens:
+    post:
+      tags: [operator]
+      operationId: adminCreateToken
+      summary: Create a tenant API token (for example the tenant's first admin token).
+      parameters: [{$ref: "#/components/parameters/id"}]
+      requestBody: {$ref: "#/components/requestBodies/CreateToken"}
+      responses:
+        "201": {$ref: "#/components/responses/NewToken"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/admin/tenants/{id}/enrollment-tokens:
+    post:
+      tags: [operator]
+      operationId: adminCreateEnrollmentTokens
+      parameters: [{$ref: "#/components/parameters/id"}]
+      requestBody: {$ref: "#/components/requestBodies/EnrollmentTokens"}
+      responses:
+        "201": {$ref: "#/components/responses/EnrollmentTokens"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/admin/devices/{id}/revoke:
+    post:
+      tags: [operator]
+      operationId: adminRevokeDevice
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200": {$ref: "#/components/responses/Device"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/admin/audit:
+    get:
+      tags: [operator, audit]
+      operationId: adminAudit
+      summary: Fleet-wide audit log, newest first.
+      parameters: [{$ref: "#/components/parameters/limit1000"}, {$ref: "#/components/parameters/cursor"}]
+      responses:
+        "200": {$ref: "#/components/responses/AuditPage"}
+        default: {$ref: "#/components/responses/Problem"}
+
+  /v1/tenant:
+    get:
+      tags: [tenant]
+      operationId: getTenant
+      description: "Scope: tenant:admin."
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Problem"}
+    patch:
+      tags: [tenant]
+      operationId: patchTenant
+      description: "Scope: tenant:admin."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [retention_days]
+              properties:
+                retention_days: {type: integer, minimum: 1, maximum: 3650}
+      responses:
+        "200": {$ref: "#/components/responses/Tenant"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/tokens:
+    post:
+      tags: [tenant]
+      operationId: createToken
+      description: "Scope: tenant:admin. The token value is returned once."
+      requestBody: {$ref: "#/components/requestBodies/CreateToken"}
+      responses:
+        "201": {$ref: "#/components/responses/NewToken"}
+        default: {$ref: "#/components/responses/Problem"}
+    get:
+      tags: [tenant]
+      operationId: listTokens
+      description: "Scope: tenant:admin."
+      parameters: [{$ref: "#/components/parameters/limit1000"}, {$ref: "#/components/parameters/cursor"}]
+      responses:
+        "200":
+          description: Tokens by ID. Values are never shown again.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TokenPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/tokens/{id}:
+    get:
+      tags: [tenant]
+      operationId: getToken
+      description: "Scope: tenant:admin."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200":
+          description: The token, without its value.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Token"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [tenant]
+      operationId: revokeToken
+      description: "Scope: tenant:admin."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "204": {description: Revoked.}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/enrollment-tokens:
+    post:
+      tags: [tenant, devices]
+      operationId: createEnrollmentTokens
+      description: "Scope: devices:admin. Each token enrolls one device, once."
+      requestBody: {$ref: "#/components/requestBodies/EnrollmentTokens"}
+      responses:
+        "201": {$ref: "#/components/responses/EnrollmentTokens"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      description: "Scope: devices:read."
+      parameters:
+        - {$ref: "#/components/parameters/limit1000"}
+        - {$ref: "#/components/parameters/cursor"}
+        - name: status
+          in: query
+          schema: {$ref: "#/components/schemas/DeviceStatus"}
+      responses:
+        "200":
+          description: Devices by ID.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/DevicePage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/devices/{id}:
+    get:
+      tags: [devices]
+      operationId: getDevice
+      description: "Scope: devices:read. Includes gap counts."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200": {$ref: "#/components/responses/Device"}
+        default: {$ref: "#/components/responses/Problem"}
+    delete:
+      tags: [devices]
+      operationId: deleteDevice
+      description: "Scope: devices:admin. Revokes the device, then deletes its data in a job."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "202": {$ref: "#/components/responses/Accepted"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/devices/{id}/revoke:
+    post:
+      tags: [devices]
+      operationId: revokeDevice
+      description: "Scope: devices:admin. Data from the device is dropped from the commit on."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200": {$ref: "#/components/responses/Device"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/devices/{id}/readings:
+    get:
+      tags: [readings]
+      operationId: listReadings
+      description: "Scope: readings:read. Readings in seq order, which is collection order. Default window: the last 24 hours."
+      parameters:
+        - {$ref: "#/components/parameters/id"}
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+        - {name: metric, in: query, schema: {$ref: "#/components/schemas/Name"}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 10000, default: 1000}}
+        - {$ref: "#/components/parameters/cursor"}
+      responses:
+        "200":
+          description: One page of decrypted readings.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ReadingPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/devices/{id}/gaps:
+    get:
+      tags: [readings]
+      operationId: listGaps
+      description: "Scope: readings:read. Seq ranges the device reported it will never send."
+      parameters: [{$ref: "#/components/parameters/id"}, {$ref: "#/components/parameters/limit1000"}, {$ref: "#/components/parameters/cursor"}]
+      responses:
+        "200":
+          description: Gaps in seq order.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GapPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/exports:
+    post:
+      tags: [exports]
+      operationId: createExport
+      description: "Scope: exports:write. Exports one device, or the whole tenant without a body."
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                device_id: {type: string, format: uuid}
+      responses:
+        "202":
+          description: Export queued.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Export"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/exports/{id}:
+    get:
+      tags: [exports]
+      operationId: getExport
+      description: "Scope: exports:read."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200":
+          description: Export status.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Export"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/exports/{id}/download:
+    get:
+      tags: [exports]
+      operationId: downloadExport
+      description: "Scope: exports:read. Gzip-compressed NDJSON, one reading per line."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200":
+          description: The export file.
+          headers:
+            Content-Digest:
+              description: RFC 9530 digest, `sha-256=:<base64>:`.
+              schema: {type: string}
+          content:
+            application/gzip:
+              schema: {type: string, contentMediaType: application/gzip}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/audit:
+    get:
+      tags: [audit]
+      operationId: listAudit
+      description: "Scope: audit:read. The tenant's audit log, newest first."
+      parameters: [{$ref: "#/components/parameters/limit1000"}, {$ref: "#/components/parameters/cursor"}]
+      responses:
+        "200": {$ref: "#/components/responses/AuditPage"}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/jobs/{id}:
+    get:
+      tags: [tenant]
+      operationId: getJob
+      description: "Scope: devices:read."
+      parameters: [{$ref: "#/components/parameters/id"}]
+      responses:
+        "200":
+          description: Job status.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Job"}
+        default: {$ref: "#/components/responses/Problem"}
+
+  /v1/enroll:
+    post:
+      tags: [device-identity]
+      operationId: enroll
+      summary: Trade a one-time token and a CSR for a device certificate (device listener).
+      security: []
+      servers: [{url: "https://localhost:8444"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token, csr_pem]
+              properties:
+                token: {type: string, description: "fwe_... enrollment token"}
+                csr_pem: {type: string, description: PEM CSR with an ECDSA P-256 key; the subject is ignored}
+                name: {type: string, maxLength: 200}
+      responses:
+        "201":
+          description: Enrolled.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [device_id, certificate_pem, ca_bundle_pem, broker_url, api_url]
+                properties:
+                  device_id: {type: string, format: uuid}
+                  certificate_pem: {type: string}
+                  ca_bundle_pem: {type: string}
+                  broker_url: {type: string}
+                  api_url: {type: string}
+        default: {$ref: "#/components/responses/Problem"}
+  /v1/renew:
+    post:
+      tags: [device-identity]
+      operationId: renew
+      summary: Renew the device certificate for the same key, over mutual TLS (device listener).
+      security: []
+      servers: [{url: "https://localhost:8444"}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [csr_pem]
+              properties:
+                csr_pem: {type: string}
+      responses:
+        "200":
+          description: New certificate.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [certificate_pem, ca_bundle_pem]
+                properties:
+                  certificate_pem: {type: string}
+                  ca_bundle_pem: {type: string}
+        default: {$ref: "#/components/responses/Problem"}
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: "Tenant token (fwt_...) or operator token (fwo_...)."
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+    cursor:
+      name: cursor
+      in: query
+      description: Opaque cursor from a previous page's next_cursor.
+      schema: {type: string}
+    limit1000:
+      name: limit
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 1000, default: 100}
+  requestBodies:
+    CreateToken:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [name, scopes]
+            properties:
+              name: {type: string, minLength: 1, maxLength: 200}
+              scopes:
+                type: array
+                minItems: 1
+                uniqueItems: true
+                items: {$ref: "#/components/schemas/Scope"}
+    EnrollmentTokens:
+      required: false
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            properties:
+              count: {type: integer, minimum: 1, maximum: 1000, default: 1}
+              ttl_seconds: {type: integer, minimum: 60, maximum: 86400, default: 900}
+  responses:
+    Problem:
+      description: An error (RFC 9457).
+      content:
+        application/problem+json:
+          schema: {$ref: "#/components/schemas/Problem"}
+    Tenant:
+      description: The tenant.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Tenant"}
+    Tenant201:
+      description: Tenant created.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Tenant"}
+    Device:
+      description: The device.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Device"}
+    NewToken:
+      description: Token created; `token` is shown only here.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - {$ref: "#/components/schemas/Token"}
+              - {type: object, required: [token]}
+    EnrollmentTokens:
+      description: Enrollment tokens, shown only here.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [tokens]
+            properties:
+              tokens:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: false
+                  required: [token, expires_at]
+                  properties:
+                    token: {type: string, pattern: "^fwe_[a-z2-7]{52}$"}
+                    expires_at: {type: string, format: date-time}
+    Accepted:
+      description: Work queued as a background job.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: false
+            required: [job_id]
+            properties:
+              job_id: {type: string, format: uuid, description: The nil UUID when an identical job was already queued.}
+              status_url: {type: string}
+    AuditPage:
+      description: Audit entries, newest first.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/AuditPage"}
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, code]
+      properties:
+        type: {type: string}
+        title: {type: string}
+        status: {type: integer}
+        detail: {type: string}
+        instance: {type: string}
+        code: {type: string, description: Stable machine-readable reason.}
+        errors: {type: array, items: {type: string}}
+    Name:
+      type: string
+      pattern: "^[a-z0-9_.]{1,64}$"
+    Scope:
+      type: string
+      enum: [devices:read, devices:admin, readings:read, exports:read, exports:write, audit:read, "tenant:admin"]
+    Tenant:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, retention_days, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        status: {type: string, enum: [active, destroying, destroyed]}
+        retention_days: {type: integer, minimum: 1, maximum: 3650}
+        created_at: {type: string, format: date-time}
+        destroyed_at: {type: string, format: date-time}
+    TenantPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Tenant"}}
+        next_cursor: {type: string}
+    DeviceStatus:
+      type: string
+      enum: [active, revoked, deleted]
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, name, status, acked_seq, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        status: {$ref: "#/components/schemas/DeviceStatus"}
+        acked_seq: {type: integer, minimum: 0, description: Every seq up to this is stored or a reported gap.}
+        last_seen_at: {type: string, format: date-time}
+        last_batch_at: {type: string, format: date-time}
+        cert_not_after: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        gap_count: {type: integer, minimum: 0}
+        gap_seqs: {type: integer, minimum: 0}
+    DevicePage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Device"}}
+        next_cursor: {type: string}
+    Token:
+      type: object
+      additionalProperties: false
+      required: [id, name, scopes, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        name: {type: string}
+        scopes: {type: array, items: {$ref: "#/components/schemas/Scope"}}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: string, format: date-time}
+        revoked_at: {type: string, format: date-time}
+        token: {type: string, pattern: "^fwt_[0-9a-f]{32}_[a-z2-7]{52}$"}
+    TokenPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Token"}}
+        next_cursor: {type: string}
+    Reading:
+      type: object
+      additionalProperties: false
+      required: [seq, collected_at, collector, metric, value]
+      properties:
+        seq: {type: integer, minimum: 1}
+        collected_at: {type: string, format: date-time}
+        collector: {$ref: "#/components/schemas/Name"}
+        metric: {$ref: "#/components/schemas/Name"}
+        value: {type: number}
+        labels: {type: object, additionalProperties: {type: string}}
+    ReadingPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Reading"}}
+        next_cursor: {type: string}
+    Gap:
+      type: object
+      additionalProperties: false
+      required: [from_seq, to_seq, reason, reported_at]
+      properties:
+        from_seq: {type: integer, minimum: 1}
+        to_seq: {type: integer, minimum: 1}
+        reason: {type: string, enum: [UNSPECIFIED, DISK_BUDGET, CORRUPTION, LOST]}
+        reported_at: {type: string, format: date-time}
+    GapPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/Gap"}}
+        next_cursor: {type: string}
+    Export:
+      type: object
+      additionalProperties: false
+      required: [id, status, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        device_id: {type: string, format: uuid}
+        status: {type: string, enum: [pending, running, ready, failed, expired]}
+        bytes: {type: integer, minimum: 0}
+        reading_count: {type: integer, minimum: 0}
+        sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        error: {type: string}
+        created_at: {type: string, format: date-time}
+        completed_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        download_url: {type: string}
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, at, actor_type, actor_id, action, target_type, target_id, result, details]
+      properties:
+        id: {type: integer}
+        tenant_id: {type: string, format: uuid}
+        at: {type: string, format: date-time}
+        actor_type: {type: string, enum: [operator, tenant_token, device, system]}
+        actor_id: {type: string}
+        action: {type: string}
+        target_type: {type: string}
+        target_id: {type: string}
+        result: {type: string, enum: [success, denied, failure]}
+        details: {type: object}
+    AuditPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/AuditEntry"}}
+        next_cursor: {type: string}
+    Job:
+      type: object
+      additionalProperties: false
+      required: [id, kind, status, attempts, created_at]
+      properties:
+        id: {type: string, format: uuid}
+        kind: {type: string, enum: [retention, export, device_purge, tenant_destroy]}
+        status: {type: string, enum: [queued, running, succeeded, failed]}
+        attempts: {type: integer, minimum: 0}
+        last_error: {type: string}
+        result: {}
+        created_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
