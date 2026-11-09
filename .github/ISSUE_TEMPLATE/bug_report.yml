@@ -1,0 +1,34 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations: {required: true}
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Commands, configuration (without secrets), and the component (agent, bridge, ingest, API, charm).
+    validations: {required: true}
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `fleetwire-agent version` or the service's `version` command.
+    validations: {required: true}
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant JSON log lines. Remove tokens and keys.
+      render: text
+  - type: checkboxes
+    id: guarantee
+    attributes:
+      label: Data loss or duplication
+      options:
+        - label: This bug loses, duplicates or leaks readings (if so, consider a private security report).

@@ -1,0 +1,104 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(git ls-files -z '*.go' ':!:internal/gen/' | xargs -0 gofmt -s -l)
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+      - name: Unit and integration tests (race detector; PostgreSQL via testcontainers)
+        run: go test -race -count=1 -timeout 20m ./...
+      - name: Fuzz smoke (30 s per target)
+        run: ./scripts/fuzz-smoke.sh 30s
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Generated code is up to date
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+          go install github.com/bufbuild/buf/cmd/buf@v1.75.0
+          make check-generated
+
+  proto:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: bufbuild/buf-action@37ac33d8960807670a6e9719080e885197b09cc6 # v1.7.0
+        with:
+          lint: true
+          format: false
+          breaking: ${{ github.event_name == 'pull_request' }}
+          breaking_against: ${{ github.event.repository.clone_url }}#branch=main
+          push: false
+
+  charms:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        charm: [fleetwire-api-k8s, fleetwire-ingest-k8s, fleetwire-bridge-k8s, mosquitto-k8s]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: pip install tox==4.32.0
+      - run: tox -c charms/${{ matrix.charm }} -e lint,unit
+
+  rules:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: promtool
+        env:
+          PROM_VERSION: "3.16.0"
+          PROM_SHA256: 68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34
+        run: |
+          tarball="prometheus-${PROM_VERSION}.linux-amd64.tar.gz"
+          curl -fsSLo "$tarball" "https://github.com/prometheus/prometheus/releases/download/v${PROM_VERSION}/${tarball}"
+          echo "${PROM_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball"
+          sudo install "prometheus-${PROM_VERSION}.linux-amd64/promtool" /usr/local/bin/
+          make rules-test
+
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: make docs
+      - name: Link check
+        run: .cache/docs-venv/bin/sphinx-build -b linkcheck docs docs/_build/linkcheck
+
+  images:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        binary: [fleetwire-api, fleetwire-bridge, fleetwire-ingest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: docker buildx build --build-arg BINARY=${{ matrix.binary }} --build-arg VERSION=${{ github.sha }} -t ${{ matrix.binary }}:ci .

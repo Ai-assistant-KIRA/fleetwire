@@ -1,0 +1,97 @@
+version: 2
+project_name: fleetwire
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  # The first build carries the shared settings; the others merge them in.
+  - &build
+    id: agent
+    main: ./cmd/fleetwire-agent
+    binary: fleetwire-agent
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo.Version={{ .Version }}
+      - -X github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo.Commit={{ .FullCommit }}
+      - -X github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo.Date={{ .Date }}
+  - {<<: *build, id: api, main: ./cmd/fleetwire-api, binary: fleetwire-api}
+  - {<<: *build, id: bridge, main: ./cmd/fleetwire-bridge, binary: fleetwire-bridge}
+  - {<<: *build, id: ingest, main: ./cmd/fleetwire-ingest, binary: fleetwire-ingest}
+  - {<<: *build, id: fwctl, main: ./cmd/fwctl, binary: fwctl, goos: [linux, darwin]}
+  - {<<: *build, id: loadgen, main: ./cmd/fleetwire-loadgen, binary: fleetwire-loadgen}
+  - {<<: *build, id: checker, main: ./cmd/fleetwire-checker, binary: fleetwire-checker}
+  - {<<: *build, id: chaos, main: ./cmd/fleetwire-chaos, binary: fleetwire-chaos}
+# fwctl also runs on macOS, the other binaries only on Linux, so each set
+# gets its own archive.
+archives:
+  - id: fleetwire
+    ids: [agent, api, bridge, ingest, loadgen, checker, chaos]
+    name_template: "fleetwire_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE, README.md, CHANGELOG.md]
+  - id: fwctl
+    ids: [fwctl]
+    name_template: "fwctl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    files: [LICENSE, NOTICE]
+
+checksum:
+  name_template: checksums.txt
+
+# Syft SBOM (SPDX JSON) for every archive.
+sboms:
+  - artifacts: archive
+
+# Keyless: the signing certificate names this repository's release workflow.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args: ["sign-blob", "--yes", "--output-signature=${signature}", "--output-certificate=${certificate}", "${artifact}"]
+    artifacts: checksum
+
+dockers_v2:
+  - id: api
+    ids: [api]
+    images: ["ghcr.io/ai-assistant-kira/fleetwire-api"]
+    tags: ["{{ .Version }}"]
+    dockerfile: deploy/release/Dockerfile
+    platforms: [linux/amd64, linux/arm64]
+    build_args: {BINARY: fleetwire-api}
+    sbom: true
+  - id: bridge
+    ids: [bridge]
+    images: ["ghcr.io/ai-assistant-kira/fleetwire-bridge"]
+    tags: ["{{ .Version }}"]
+    dockerfile: deploy/release/Dockerfile
+    platforms: [linux/amd64, linux/arm64]
+    build_args: {BINARY: fleetwire-bridge}
+    sbom: true
+  - id: ingest
+    ids: [ingest]
+    images: ["ghcr.io/ai-assistant-kira/fleetwire-ingest"]
+    tags: ["{{ .Version }}"]
+    dockerfile: deploy/release/Dockerfile
+    platforms: [linux/amd64, linux/arm64]
+    build_args: {BINARY: fleetwire-ingest}
+    sbom: true
+
+docker_signs:
+  - artifacts: manifests
+    args: ["sign", "--yes", "${artifact}@${digest}"]
+
+release:
+  github:
+    owner: Ai-assistant-KIRA
+    name: fleetwire
+  prerelease: auto
+
+changelog:
+  use: github
+  sort: asc
