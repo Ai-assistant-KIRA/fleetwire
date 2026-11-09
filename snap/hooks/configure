@@ -1,0 +1,10 @@
+#!/bin/sh
+# Runs on install and on every `snap set`. A non-zero exit makes snapd
+# refuse the change, so bad values never reach the daemon (R10.4). The check
+# uses the same parser and rules as the daemon itself.
+set -eu
+"$SNAP/bin/fleetwire-agent" config check
+# Restart only a running daemon; on install, snapd starts it afterwards.
+if snapctl services "$SNAP_INSTANCE_NAME.daemon" | grep -q " active"; then
+  snapctl restart "$SNAP_INSTANCE_NAME.daemon"
+fi

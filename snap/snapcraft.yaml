@@ -1,0 +1,47 @@
+name: fleetwire-agent
+base: core24
+version: git
+summary: Reliable telemetry agent for Ubuntu Core fleets
+description: |
+  Collects system readings (CPU, memory, load, uptime, disk, temperature),
+  keeps them in a local write-ahead log in $SNAP_DATA, and sends them over
+  MQTT with mutual TLS until the fleetwire backend confirms they are stored.
+
+  Enroll the device:
+    snap set fleetwire-agent enroll.url=https://api.example:8444 enroll.token=fwe_...
+  For a private CA, also set enroll.ca-bundle="$(cat ca.pem)".
+  Temperatures need: snap connect fleetwire-agent:hardware-observe
+grade: stable
+confinement: strict
+license: Apache-2.0
+website: https://github.com/Ai-assistant-KIRA/fleetwire
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  daemon:
+    command: bin/fleetwire-agent run
+    daemon: simple
+    restart-condition: always
+    restart-delay: 5s
+    # network: broker and enrollment API. network-bind: /metrics and
+    # /status on 127.0.0.1:9465. system-observe: /proc/stat, meminfo,
+    # loadavg, uptime. hardware-observe: /sys/class/thermal.
+    plugs: [network, network-bind, system-observe, hardware-observe]
+  fleetwire-agent:
+    # `fleetwire-agent status` asks the daemon over 127.0.0.1.
+    command: bin/fleetwire-agent
+    plugs: [network]
+
+parts:
+  agent:
+    plugin: go
+    source: .
+    build-snaps: [go/1.27/stable]
+    override-build: |
+      VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+      CGO_ENABLED=0 go build -trimpath -buildvcs=false \
+        -ldflags "-s -w -X github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo.Version=${VERSION}" \
+        -o "${CRAFT_PART_INSTALL}/bin/fleetwire-agent" ./cmd/fleetwire-agent

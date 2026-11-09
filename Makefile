@@ -68,6 +68,10 @@ rules-test: ## Check the Prometheus rules and run their unit tests
 	promtool check rules deploy/prometheus/rules/*.yml
 	promtool test rules deploy/prometheus/tests/*.yml
 
+.PHONY: snap
+snap: ## Build the agent snap (snapcraft with the LXD backend)
+	snapcraft pack
+
 # ---- Local stack ----------------------------------------------------------
 
 COMPOSE := docker compose -f deploy/compose/compose.yaml
