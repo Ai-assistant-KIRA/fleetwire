@@ -40,6 +40,10 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           go install github.com/bufbuild/buf/cmd/buf@v1.75.0
           make check-generated
+      - name: Configuration reference is up to date
+        run: |
+          make docs-reference
+          git diff --exit-code -- docs/reference/configuration.md || { echo "configuration reference is stale: run make docs-reference"; exit 1; }
 
   proto:
     runs-on: ubuntu-24.04

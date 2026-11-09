@@ -1,3 +1,7 @@
+---
+orphan: true
+---
+
 # ADR-NNNN: Title in the imperative
 
 - Status: proposed | accepted | superseded by ADR-NNNN
