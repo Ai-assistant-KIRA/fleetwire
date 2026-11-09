@@ -219,3 +219,20 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"certificate_pem": string(chain), "ca_bundle_pem": string(s.cfg.CABundlePEM)})
 }
+
+// getCRL serves the device CRL, the way a CRL distribution point does. It
+// is public: the list is signed by the Device Issuing CA and holds only
+// serial numbers. Brokers that cannot read the API's CRL file fetch it here.
+func (s *Server) getCRL(w http.ResponseWriter, r *http.Request) {
+	pemBytes := s.crl.Latest()
+	if pemBytes == nil {
+		writeProblem(w, r, &apiError{status: http.StatusServiceUnavailable, code: "crl_not_ready",
+			detail: "the CRL has not been published yet; retry shortly"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	// A failed write means the client is gone.
+	_, _ = w.Write(pemBytes)
+}

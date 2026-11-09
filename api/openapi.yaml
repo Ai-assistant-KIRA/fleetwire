@@ -398,6 +398,25 @@ paths:
                   ca_bundle_pem: {type: string}
         default: {$ref: "#/components/responses/Problem"}
 
+  /v1/crl:
+    get:
+      tags: [device-identity]
+      operationId: getCRL
+      summary: The device certificate revocation list (device listener).
+      description: >-
+        Public, like any CRL distribution point: signed by the Device Issuing
+        CA and listing only serial numbers. Brokers that do not share the
+        API's file system fetch it here.
+      security: []
+      servers: [{url: "https://localhost:8444"}]
+      responses:
+        "200":
+          description: The current CRL.
+          content:
+            application/x-pem-file:
+              schema: {type: string}
+        default: {$ref: "#/components/responses/Problem"}
+
 components:
   securitySchemes:
     bearer:

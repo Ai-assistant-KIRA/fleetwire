@@ -155,6 +155,7 @@ func (s *Server) DeviceHandler() http.Handler {
 	mux := http.NewServeMux()
 	route(mux, "POST /v1/enroll", http.HandlerFunc(s.enroll))
 	route(mux, "POST /v1/renew", http.HandlerFunc(s.renew))
+	route(mux, "GET /v1/crl", http.HandlerFunc(s.getCRL))
 	return wrap("device", mux, s.log, s.metrics)
 }
 

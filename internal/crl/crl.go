@@ -33,6 +33,9 @@ type Publisher struct {
 	trigger chan struct{}
 	mu      sync.Mutex
 	lastOK  atomic.Int64
+	// latest is the last CRL written, served by GET /v1/crl for brokers that
+	// do not share the API's file system (Kubernetes).
+	latest atomic.Pointer[[]byte]
 }
 
 // NewPublisher returns a publisher writing to path.
@@ -64,6 +67,7 @@ func (p *Publisher) Publish(ctx context.Context) error {
 	if err := writeAtomic(p.path, pemBytes); err != nil {
 		return err
 	}
+	p.latest.Store(&pemBytes)
 	p.lastOK.Store(time.Now().UnixNano())
 	p.log.Info("crl published", "path", p.path, "revoked", len(entries))
 	return nil
@@ -102,6 +106,15 @@ func writeAtomic(path string, data []byte) error {
 	defer d.Close()
 	if err := d.Sync(); err != nil {
 		return fmt.Errorf("crl: fsync dir: %w", err)
+	}
+	return nil
+}
+
+// Latest returns the last CRL this process published (PEM), or nil before
+// the first publish.
+func (p *Publisher) Latest() []byte {
+	if b := p.latest.Load(); b != nil {
+		return *b
 	}
 	return nil
 }

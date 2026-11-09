@@ -52,6 +52,7 @@ func newContract(t *testing.T, h *apitest.Harness) *contract {
 	}
 	openapi3filter.RegisterBodyDecoder("application/problem+json", openapi3filter.RegisteredBodyDecoder("application/json"))
 	openapi3filter.RegisterBodyDecoder("application/gzip", openapi3filter.FileBodyDecoder)
+	openapi3filter.RegisterBodyDecoder("application/x-pem-file", openapi3filter.FileBodyDecoder)
 	return &contract{router: router, doc: doc, seen: map[string]bool{}}
 }
 
@@ -139,6 +140,18 @@ func TestResponsesMatchOpenAPI(t *testing.T) {
 	h.MustJSON(resp, body, 200, nil)
 	resp, body = h.Do("GET", "/v1/devices/"+devA.ID.String()+"/gaps", tok, nil)
 	h.MustJSON(resp, body, 200, nil)
+
+	// Before the first publish the CRL endpoint answers with a problem, then
+	// with the signed list.
+	if resp, body := h.DoDevice(nil, "GET", "/v1/crl", nil); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("CRL before publishing: %d %s", resp.StatusCode, body)
+	}
+	if err := h.CRL.Publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if resp, body := h.DoDevice(nil, "GET", "/v1/crl", nil); resp.StatusCode != http.StatusOK || !bytes.HasPrefix(body, []byte("-----BEGIN X509 CRL-----")) {
+		t.Fatalf("CRL: %d %.80s", resp.StatusCode, body)
+	}
 
 	csr := renewCSR(t, devA)
 	resp, body = h.DoDevice(&devA.TLS, "POST", "/v1/renew", map[string]any{"csr_pem": csr})
