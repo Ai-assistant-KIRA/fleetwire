@@ -31,8 +31,10 @@ The first version; nothing has been released yet.
 - `fwctl`, the operator and tenant CLI.
 - Test tools: `fleetwire-loadgen` (thousands of real agent instances in one
   process), `fleetwire-checker` (reads everything back and proves the
-  guarantee) and `fleetwire-chaos` (nine failure scenarios and a results
-  table).
+  guarantee), `fleetwire-chaos` (nine failure scenarios and a results
+  table, with the devices' state optionally on tmpfs), the throughput
+  search, and QEMU scripts for the power-off test on Ubuntu Core 24 or an
+  Ubuntu Server 24.04 stand-in.
 - Compose development stack with three Kafka brokers, two bridges, two
   ingest instances, Toxiproxy, Prometheus, Grafana and Jaeger; `make demo`.
 - SLO recording rules, multi-window burn-rate alerts with promtool tests, and
