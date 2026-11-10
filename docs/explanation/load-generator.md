@@ -22,6 +22,12 @@ plus noise). Nothing else is simulated or mocked.
 - Instances use smaller log segments (256 KiB) than the agent's default
   (4 MiB), because each writes little and thousands of 4 MiB files only
   waste disk.
+- Every instance fsyncs its log and its state file, as a real device does,
+  but on one machine they all reach the same disk, which the database uses
+  too. Large runs can put the state directory on tmpfs (`-state-dir`),
+  where an fsync costs nothing; that also means those runs do not test
+  durability against power loss, which the power-off test covers. The
+  results tables say where the state was.
 - Killing the load generator (`agent-kill` scenario) kills every instance at
   once with SIGKILL, which is harsher than one device crashing.
 
