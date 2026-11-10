@@ -50,12 +50,19 @@ x-kafka: &kafka
   image: apache/kafka:4.1.0
   restart: unless-stopped
   networks: [fleetwire]
+  # The check asks the broker for its API versions, so "healthy" means it
+  # serves requests, not only that the port is open. Each check starts a
+  # JVM: with the default flags that cost about 3 CPU seconds, so three
+  # brokers checked every 10 s took most of a core of the 4 vCPU test VM.
+  # A small heap, the serial collector and the client compiler cut it to
+  # under 2 s, and after startup the check runs every 30 s.
   healthcheck:
-    test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
-    interval: 10s
-    timeout: 10s
-    retries: 12
-    start_period: 20s
+    test: ["CMD-SHELL", "KAFKA_HEAP_OPTS=-Xmx64m KAFKA_JVM_PERFORMANCE_OPTS='-XX:TieredStopAtLevel=1 -XX:+UseSerialGC' /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+    interval: 30s
+    start_interval: 5s
+    start_period: 60s
+    timeout: 15s
+    retries: 4
 
 x-mqtt-env: &mqtt-env
   FLEETWIRE_MQTT_URL: tls://mosquitto:8884
