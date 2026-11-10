@@ -34,6 +34,17 @@ the stored data is complete (R6.5).
   `kind` column. The permanent records are `chunks` (stored) and
   `device_gaps` (gaps); `device_ranges` is only a cache of their union above
   the watermark, and merging across kinds keeps it at one row per hole.
+- One batch is one transaction, sent as two pipelines (`store.DB.IngestBatch`):
+  the reads with `BEGIN`, then the writes with `COMMIT`. Sent one statement
+  at a time it took eight round trips, during which the row lock was held.
+- **Change after the 10,000-device runs:** `chunks.key_id` has no foreign
+  key to `tenant_keys` (migration 00004). The check locked the tenant's one
+  active key row `FOR KEY SHARE` in every ingest transaction, so all of a
+  tenant's concurrent transactions shared that row's lock through
+  multixacts. With 10,000 devices of one tenant on the test VM, ingest
+  stored 505 readings/s with the constraint and 787/s without it, 64
+  workers each. The key still exists for every chunk: ingest seals only
+  with keys it read from `tenant_keys`, and key rows are never deleted.
 
 ## Alternatives considered
 
@@ -53,3 +64,8 @@ the stored data is complete (R6.5).
 - Readings that reach the server after the device declared their seqs a gap
   are not stored. The device made that decision, and the checker counts those
   seqs as gaps, not missing.
+- Without the foreign key, the database no longer refuses a chunk whose key
+  row is missing. Only a bug could write one; it would fail to decrypt, and
+  the checker and the API report that. The composite key to
+  `devices (tenant_id, id)` stays: the same transaction already holds that
+  row's update lock, so it adds no contention.
