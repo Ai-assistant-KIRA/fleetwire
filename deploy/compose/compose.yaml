@@ -217,6 +217,11 @@ services:
     environment:
       <<: [*env, *mqtt-env]
       FLEETWIRE_DATABASE_URL: postgres://fleetwire_app:app@postgres:5432/fleetwire?sslmode=disable
+      # Throughput is about workers / transaction time; the load tests need
+      # more than the default 16 (docs/how-to/operate.md, "Size ingest").
+      # 2 x 72 connections fit postgres' max_connections=200 with the API.
+      FLEETWIRE_INGEST_WORKERS: "64"
+      FLEETWIRE_DATABASE_MAX_CONNS: "72"
       FLEETWIRE_MQTT_CERT_FILE: /secrets/ingest.pem
       FLEETWIRE_MQTT_KEY_FILE: /secrets/ingest.key
       FLEETWIRE_KEYRING_DIR: /state/keyring

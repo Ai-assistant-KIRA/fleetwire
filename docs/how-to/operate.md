@@ -66,6 +66,19 @@ $ fwctl export download <export-id> -out data.ndjson.gz
 `download` checks the file against the `Content-Digest` header before it
 keeps it.
 
+## Size ingest
+
+Each ingest instance works on up to `FLEETWIRE_INGEST_WORKERS` devices at
+once, one database transaction each, so its throughput is about workers
+divided by the transaction time (`fleetwire_ingest_tx_seconds`). When the
+consumer lag keeps growing while the database still has headroom, raise the
+workers, or add instances (each takes a share of the 24 partitions). Keep
+`FLEETWIRE_DATABASE_MAX_CONNS` a few above the workers, and PostgreSQL's
+`max_connections` above the sum over all instances and the API. The
+defaults (16 workers, 20 connections) fit a PostgreSQL with the default
+100 connections; the Compose stack runs 64 workers per instance against
+`max_connections=200` for the load tests.
+
 ## Audit
 
 ```console
