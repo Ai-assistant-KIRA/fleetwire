@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"net/http"
@@ -35,16 +36,20 @@ import (
 
 // Options for a chaos run.
 type Options struct {
-	RepoDir       string
-	BinDir        string
-	OutDir        string
-	Devices       int
-	Interval      time.Duration
-	Readings      int
-	Ramp          string
-	Steady        time.Duration
-	After         time.Duration
-	WALSync       string
+	RepoDir  string
+	BinDir   string
+	OutDir   string
+	Devices  int
+	Interval time.Duration
+	Readings int
+	Ramp     string
+	Steady   time.Duration
+	After    time.Duration
+	WALSync  string
+	// StateDir holds the devices' local state when set, one subdirectory
+	// per scenario (default: next to the scenario's logs in OutDir/raw).
+	// Large runs put it on tmpfs; see stateLocation.
+	StateDir      string
 	APIURL        string
 	DeviceAPIURL  string
 	BrokerURL     string
@@ -154,8 +159,10 @@ func (o Options) repoPath(rel string) string {
 }
 
 type run struct {
-	o         Options
-	dir       string
+	o   Options
+	dir string
+	// devDir is the load generator's state directory.
+	devDir    string
 	tenantTok string
 	loadgen   *exec.Cmd
 	logFile   *os.File
@@ -196,6 +203,10 @@ func Run(ctx context.Context, o Options) ([]Row, error) {
 		}
 		r := *base
 		r.dir = filepath.Join(rawDir, name)
+		r.devDir = filepath.Join(r.dir, "devices")
+		if o.StateDir != "" {
+			r.devDir = filepath.Join(o.StateDir, stamp, name)
+		}
 		row, err := r.scenario(ctx, sc)
 		if err != nil {
 			row.Note = err.Error()
@@ -222,6 +233,9 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 	start := time.Now()
 	defer func() { row.Duration = time.Since(start).Round(time.Second).String() }()
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
+		return row, err
+	}
+	if err := os.MkdirAll(r.devDir, 0o700); err != nil {
 		return row, err
 	}
 	r.o.Log.Info("scenario start", "scenario", sc.name, "devices", r.o.Devices)
@@ -285,18 +299,25 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 // has read results.jsonl. They are about nine files per device, so a
 // 2,000-device suite left 160,000 files, and a few runs, copied into
 // Docker build contexts as well, used up every inode of the test VM's
-// disk. The logs, results.jsonl and the checker's report stay in raw/.
+// disk. results.jsonl is kept next to the loadgen log and the checker's
+// report in raw/.
 func (r *run) pruneDevices() error {
-	dir := filepath.Join(r.dir, "devices")
-	entries, err := os.ReadDir(dir)
+	results, err := os.ReadFile(filepath.Join(r.devDir, "results.jsonl"))
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if e.IsDir() {
-			if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
-				return fmt.Errorf("prune device state: %w", err)
-			}
+	//nolint:gosec // G703: both paths are this run's own directories, built above.
+	if err := os.WriteFile(filepath.Join(r.dir, "results.jsonl"), results, 0o600); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(r.devDir); err != nil {
+		return fmt.Errorf("prune device state: %w", err)
+	}
+	if r.o.StateDir != "" {
+		// The run's directory under StateDir goes once its last scenario is
+		// pruned; until then it is not empty.
+		if err := os.Remove(filepath.Dir(r.devDir)); err != nil && !errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("prune device state: %w", err)
 		}
 	}
 	return nil
@@ -387,7 +408,7 @@ func (r *run) startLoadgen(ctx context.Context) error {
 		r.logFile = f
 	}
 	cmd := exec.CommandContext(context.WithoutCancel(ctx), filepath.Join(r.o.BinDir, "fleetwire-loadgen"), "run", //nolint:gosec // G204: our own binary
-		"-devices", strconv.Itoa(r.o.Devices), "-state-dir", filepath.Join(r.dir, "devices"),
+		"-devices", strconv.Itoa(r.o.Devices), "-state-dir", r.devDir,
 		"-interval", r.o.Interval.String(), "-readings", strconv.Itoa(r.o.Readings), "-duration", "24h",
 		"-ramp", r.o.Ramp, "-api", r.o.APIURL, "-device-api", r.o.DeviceAPIURL, "-broker", r.o.BrokerURL,
 		"-ca-file", r.o.repoPath("deploy/compose/secrets/ca-bundle.pem"),
@@ -414,7 +435,7 @@ func (r *run) stopLoadgen() error {
 func (r *run) check(ctx context.Context, row Row) (Row, error) {
 	report := filepath.Join(r.dir, "checker.json")
 	cmd := exec.CommandContext(ctx, filepath.Join(r.o.BinDir, "fleetwire-checker"), //nolint:gosec // G204: our own binary
-		"-results", filepath.Join(r.dir, "devices", "results.jsonl"), "-json-out", report,
+		"-results", filepath.Join(r.devDir, "results.jsonl"), "-json-out", report,
 		"-keyring-dir", r.o.repoPath("deploy/compose/.state/keyring"),
 		"-keyring-root-key", r.o.repoPath("deploy/compose/secrets/keyring-root.key"))
 	out, err := cmd.CombinedOutput()

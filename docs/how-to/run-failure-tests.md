@@ -41,6 +41,40 @@ Results go to `docs/results/<time>-<commit>.md` and `.json`. Raw logs,
 Each device's local log and keys are deleted once the checker has read
 them; they are about nine files per device.
 
+## Large runs on one machine
+
+With thousands of devices, the load generator and the whole stack share one
+machine, so the harness itself costs a large part of it. Two settings of
+the host matter:
+
+- Turn off Docker's userland proxy, which otherwise copies every byte of
+  every device connection through a `docker-proxy` process (on the test VM
+  it took about 15% of a core and 180 MB at 10,000 devices):
+
+  ```console
+  $ echo '{"userland-proxy": false}' | sudo tee /etc/docker/daemon.json
+  $ sudo systemctl restart docker
+  ```
+
+- Leave memory for the devices: each load-generator device needs about
+  150 KB, and Toxiproxy about the same per connection. A machine that swaps
+  measures its disk, not fleetwire.
+- Keep the devices' local state off the disk the database uses. Each
+  device fsyncs its log and its state file, as a real device does on its
+  own disk; on one machine thousands of them share one disk with
+  PostgreSQL's commit flushes. At 10,000 devices on the test VM, ingest
+  stored 770 readings/s of the 1,000/s offered with the state on disk, and
+  kept up (1,066/s while it drained the backlog) with the state on tmpfs.
+  The table records which (the "Device state" line):
+
+  ```console
+  $ sudo mkdir -p /mnt/fw-devices && sudo mount -t tmpfs -o size=1g,mode=0700 tmpfs /mnt/fw-devices
+  $ make chaos DEVICES=10000 STATE_DIR=/mnt/fw-devices
+  ```
+
+  10,000 devices need about 250 MB there; each scenario's state is deleted
+  after its check.
+
 ## Checking one device by hand
 
 ```console

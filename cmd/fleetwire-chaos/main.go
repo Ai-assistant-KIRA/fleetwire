@@ -47,6 +47,7 @@ func run(args []string) error {
 	fs.DurationVar(&o.Steady, "steady", 60*time.Second, "Load before the fault.")
 	fs.DurationVar(&o.After, "after", 60*time.Second, "Load after recovery.")
 	fs.StringVar(&o.WALSync, "wal-sync", "interval", "wal.sync of the devices.")
+	fs.StringVar(&o.StateDir, "state-dir", "", "Where the devices' local state goes (default: next to the logs in -out/raw). Put it on tmpfs for large runs; the table says which.")
 	fs.StringVar(&o.APIURL, "api", "https://localhost:8443", "Public API URL.")
 	fs.StringVar(&o.DeviceAPIURL, "device-api", "https://localhost:8444", "Device API URL.")
 	fs.StringVar(&o.BrokerURL, "broker", "tls://127.0.0.1:18883", "Broker URL for devices (Toxiproxy).")

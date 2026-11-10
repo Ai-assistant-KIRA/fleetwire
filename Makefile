@@ -148,10 +148,11 @@ e2e: build up ## Run the end-to-end tests against the running stack
 
 DEVICES   ?= 2000
 SCENARIOS ?=
+STATE_DIR ?=
 
 .PHONY: chaos
-chaos: build up ## Run the failure suite (DEVICES=2000, SCENARIOS=a,b or all) and write docs/results
-	bin/fleetwire-chaos run -devices $(DEVICES) $(if $(SCENARIOS),-scenario $(SCENARIOS))
+chaos: build up ## Run the failure suite (DEVICES=2000, SCENARIOS=a,b, STATE_DIR=tmpfs dir) and write docs/results
+	bin/fleetwire-chaos run -devices $(DEVICES) $(if $(SCENARIOS),-scenario $(SCENARIOS)) $(if $(STATE_DIR),-state-dir $(STATE_DIR))
 
 .PHONY: throughput
 throughput: build up ## Find the highest load ingest keeps up with and write docs/results
