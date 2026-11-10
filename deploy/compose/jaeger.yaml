@@ -1,0 +1,49 @@
+# Jaeger all-in-one for the development stack: the image's default
+# configuration (jaeger v2.11.0, cmd/jaeger/internal/all-in-one.yaml) with a
+# smaller in-memory store and only the OTLP receiver the services use.
+#
+# The default keeps 100,000 traces in memory. At the stack's 10% sampling a
+# 10,000-device run produces about 100 traces per second, and Jaeger grew
+# past 1 GB on the 8 GB test VM; 10,000 traces still cover the last minute
+# or two.
+service:
+  extensions: [jaeger_storage, jaeger_query, healthcheckv2]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [jaeger_storage_exporter]
+  telemetry:
+    resource:
+      service.name: jaeger
+    logs:
+      level: info
+
+extensions:
+  jaeger_query:
+    storage:
+      traces: memstore
+  jaeger_storage:
+    backends:
+      memstore:
+        memory:
+          max_traces: 10000
+  healthcheckv2:
+    use_v2: true
+    http:
+      endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: memstore

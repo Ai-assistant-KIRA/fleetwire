@@ -266,6 +266,8 @@ services:
     image: jaegertracing/jaeger:2.11.0
     restart: unless-stopped
     networks: [fleetwire]
+    command: ["--config", "file:/etc/jaeger/config.yaml"]
+    volumes: [./jaeger.yaml:/etc/jaeger/config.yaml:ro]
     ports: ["127.0.0.1:16686:16686"]
 
 networks:
