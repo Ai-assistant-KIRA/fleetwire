@@ -53,4 +53,25 @@ times waits 5 to 30 s and sends QMP `system_reset`: a hard reset with no
 clean shutdown. After the last boot it waits until the agent's last seq is
 acked, reads `fleetwire-agent status -json` over SSH, and runs the checker
 for that device. The pass rule is the same as the chaos suite: 0 missing,
-0 duplicates.
+0 duplicates. The table goes to `docs/results/<time>-<commit>-poweroff.md`.
+
+The scripts need `qemu-system-x86`, `ovmf`, `socat` and `jq` on the host.
+
+## Without an Ubuntu One account: Ubuntu Server
+
+`server-vm.sh` boots the Ubuntu Server 24.04 cloud image with the same
+layout (UEFI, QMP socket, SSH on localhost:8022). cloud-init creates the
+user `fleetwire` with a key made for this VM, so no person is needed:
+
+```console
+$ sudo apt install cloud-image-utils socat
+$ deploy/ubuntu-core/server-vm.sh download
+$ deploy/ubuntu-core/server-vm.sh start
+$ export UC_USER=fleetwire UC_SSH_KEY=$PWD/deploy/ubuntu-core/work/id_ed25519 UC_NAME=server-vm
+$ deploy/ubuntu-core/uc-install.sh fleetwire-agent_*.snap fwe_...
+$ deploy/ubuntu-core/uc-poweroff-test.sh
+```
+
+The agent runs as the same strictly confined snap, on a real kernel and
+ext4, and the reset is as hard. What this does not test is Ubuntu Core's
+own boot and its writable partition layout.
