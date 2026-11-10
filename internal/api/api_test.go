@@ -47,11 +47,8 @@ func storeReadings(t *testing.T, h *apitest.Harness, tenant, device uuid.UUID, l
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = h.DB.InTenantTx(t.Context(), tenant, func(ctx context.Context, tx *store.Tx) error {
-		if err := tx.InsertChunk(ctx, c); err != nil {
-			return err
-		}
-		return tx.UpdateDeviceProgress(ctx, device, c.SeqHi, time.Now())
+	err = h.DB.IngestBatch(t.Context(), device, tenant, func(store.IngestState) (store.IngestWrite, error) {
+		return store.IngestWrite{Chunks: []store.Chunk{c}, UpdateProgress: true, AckedThrough: c.SeqHi, BatchAt: time.Now()}, nil
 	})
 	if err != nil {
 		t.Fatal(err)

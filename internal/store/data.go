@@ -6,77 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-
-	"github.com/Ai-assistant-KIRA/fleetwire/internal/coverage"
 )
 
-// DeviceRanges returns the covered ranges above the device's watermark.
-func (t *Tx) DeviceRanges(ctx context.Context, deviceID uuid.UUID) ([]coverage.Range, error) {
-	rows, err := t.tx.Query(ctx, `SELECT lo, hi FROM fleetwire.device_ranges WHERE device_id = $1 ORDER BY lo`, deviceID)
-	if err != nil {
-		return nil, fmt.Errorf("device ranges: %w", err)
-	}
-	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (coverage.Range, error) {
-		var c coverage.Range
-		err := r.Scan(&c.Lo, &c.Hi)
-		return c, err
-	})
-	if err != nil {
-		return nil, fmt.Errorf("device ranges: %w", err)
-	}
-	return out, nil
-}
-
-// ReplaceDeviceRanges stores the device's covered ranges above the watermark.
-func (t *Tx) ReplaceDeviceRanges(ctx context.Context, deviceID uuid.UUID, ranges []coverage.Range) error {
-	if _, err := t.tx.Exec(ctx, `DELETE FROM fleetwire.device_ranges WHERE device_id = $1`, deviceID); err != nil {
-		return fmt.Errorf("clear device ranges: %w", err)
-	}
-	if len(ranges) == 0 {
-		return nil
-	}
-	// COPY is faster but PostgreSQL refuses COPY FROM on tables with
-	// row-level security, so the rows go in as one INSERT from arrays.
-	los, his := make([]int64, len(ranges)), make([]int64, len(ranges))
-	for i, r := range ranges {
-		los[i], his[i] = int64(r.Lo), int64(r.Hi)
-	}
-	if _, err := t.tx.Exec(ctx, `
-		INSERT INTO fleetwire.device_ranges (tenant_id, device_id, lo, hi)
-		SELECT $1, $2, lo, hi FROM unnest($3::bigint[], $4::bigint[]) AS r(lo, hi)`,
-		t.tenant, deviceID, los, his); err != nil {
-		return fmt.Errorf("insert device ranges: %w", err)
-	}
-	return nil
-}
-
-// InsertChunk stores one encrypted chunk. The exclusion constraint rejects
-// any overlap with chunks already stored for the device.
-func (t *Tx) InsertChunk(ctx context.Context, c Chunk) error {
-	_, err := t.tx.Exec(ctx, `
-		INSERT INTO fleetwire.chunks (tenant_id, device_id, seq_lo, seq_hi, reading_count,
-			min_collected_at, max_collected_at, key_id, nonce, ciphertext)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		t.tenant, c.DeviceID, c.SeqLo, c.SeqHi, c.ReadingCount, c.MinCollectedAt, c.MaxCollectedAt,
-		c.KeyID, c.Nonce, c.Ciphertext)
-	if err != nil {
-		return fmt.Errorf("insert chunk %d-%d: %w", c.SeqLo, c.SeqHi, err)
-	}
-	return nil
-}
-
-// InsertGap records a reported gap. A repeat of the same gap is a no-op.
-func (t *Tx) InsertGap(ctx context.Context, g DeviceGap) error {
-	_, err := t.tx.Exec(ctx, `
-		INSERT INTO fleetwire.device_gaps (tenant_id, device_id, from_seq, to_seq, reason)
-		VALUES ($1, $2, $3, $4, $5) ON CONFLICT (device_id, from_seq) DO NOTHING`,
-		t.tenant, g.DeviceID, g.FromSeq, g.ToSeq, g.Reason)
-	if err != nil {
-		return fmt.Errorf("insert gap %d-%d: %w", g.FromSeq, g.ToSeq, err)
-	}
-	return nil
-}
+// Chunks, gaps and covered ranges are written only by DB.IngestBatch.
 
 // ListGaps pages through a device's recorded gaps in seq order.
 func (t *Tx) ListGaps(ctx context.Context, deviceID uuid.UUID, afterFrom uint64, limit int) ([]DeviceGap, error) {

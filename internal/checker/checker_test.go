@@ -101,7 +101,10 @@ func TestCheckerPassesAndCatchesProblems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.DB.InTenantTx(t.Context(), tenant, func(ctx context.Context, tx *store.Tx) error { return tx.InsertChunk(ctx, ch) }); err != nil {
+	err = h.DB.IngestBatch(t.Context(), devs[1], tenant, func(store.IngestState) (store.IngestWrite, error) {
+		return store.IngestWrite{Chunks: []store.Chunk{ch}}, nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	dupRep := c.Run(t.Context(), []checker.Expectation{{DeviceID: devs[1], LastSeq: 100}})

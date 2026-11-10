@@ -83,7 +83,7 @@ func (t *Tx) SetTenant(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return errors.New("store: tenant id must not be nil")
 	}
-	if _, err := t.tx.Exec(ctx, `SELECT set_config('fleetwire.tenant_id', $1, true)`, id.String()); err != nil {
+	if _, err := t.tx.Exec(ctx, sqlSetTenant, id.String()); err != nil {
 		return fmt.Errorf("set tenant: %w", err)
 	}
 	t.tenant = id

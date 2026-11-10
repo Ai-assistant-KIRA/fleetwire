@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/coverage"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store/storetest"
 )
@@ -35,13 +37,6 @@ func newFixture(t *testing.T, db *store.DB) fixture {
 			return err
 		}
 		now := time.Now()
-		if err := tx.InsertChunk(ctx, store.Chunk{DeviceID: f.device, SeqLo: 1, SeqHi: 10, ReadingCount: 10,
-			MinCollectedAt: now, MaxCollectedAt: now, KeyID: f.key, Nonce: []byte("n"), Ciphertext: []byte("c")}); err != nil {
-			return err
-		}
-		if err := tx.InsertGap(ctx, store.DeviceGap{DeviceID: f.device, FromSeq: 11, ToSeq: 12, Reason: "DISK_BUDGET"}); err != nil {
-			return err
-		}
 		if err := tx.InsertEnrollmentToken(ctx, uuid.New(), []byte(uuid.NewString()), now.Add(time.Hour), "test"); err != nil {
 			return err
 		}
@@ -63,7 +58,30 @@ func newFixture(t *testing.T, db *store.DB) fixture {
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
+	if err := write(t, db, f, store.IngestWrite{Chunks: []store.Chunk{f.chunk(1, 10)},
+		Gaps: []store.DeviceGap{{DeviceID: f.device, FromSeq: 11, ToSeq: 12, Reason: "DISK_BUDGET"}}}); err != nil {
+		t.Fatalf("fixture data: %v", err)
+	}
 	return f
+}
+
+// chunk is a stand-in chunk of the fixture's device; the store never
+// decrypts, so the ciphertext does not matter here.
+func (f fixture) chunk(lo, hi uint64) store.Chunk {
+	now := time.Now()
+	return store.Chunk{DeviceID: f.device, SeqLo: lo, SeqHi: hi, ReadingCount: int(hi - lo + 1),
+		MinCollectedAt: now, MaxCollectedAt: now, KeyID: f.key, Nonce: []byte("n"), Ciphertext: []byte("c")}
+}
+
+// write runs one batch transaction that writes w for the fixture's device.
+func write(t *testing.T, db *store.DB, f fixture, w store.IngestWrite) error {
+	t.Helper()
+	return db.IngestBatch(t.Context(), f.device, f.tenant, func(st store.IngestState) (store.IngestWrite, error) {
+		if !st.Found {
+			return store.IngestWrite{}, errors.New("fixture device not found")
+		}
+		return w, nil
+	})
 }
 
 var tenantTables = []string{
@@ -223,19 +241,134 @@ func TestMissingTenantSeesNothing(t *testing.T) {
 func TestExclusionConstraintRejectsOverlap(t *testing.T) {
 	db := storetest.AppDB(t)
 	f := newFixture(t, db)
-	err := db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
-		now := time.Now()
-		return tx.InsertChunk(ctx, store.Chunk{DeviceID: f.device, SeqLo: 5, SeqHi: 12, ReadingCount: 8,
-			MinCollectedAt: now, MaxCollectedAt: now, KeyID: f.key, Nonce: []byte("n"), Ciphertext: []byte("c")})
-	})
-	if !store.IsExclusionViolation(err) {
+	if err := write(t, db, f, store.IngestWrite{Chunks: []store.Chunk{f.chunk(5, 12)}}); !store.IsExclusionViolation(err) {
 		t.Fatalf("overlapping chunk: %v, want exclusion violation", err)
 	}
-	err = db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
-		return tx.InsertGap(ctx, store.DeviceGap{DeviceID: f.device, FromSeq: 12, ToSeq: 20, Reason: "LOST"})
-	})
+	err := write(t, db, f, store.IngestWrite{Gaps: []store.DeviceGap{{DeviceID: f.device, FromSeq: 12, ToSeq: 20, Reason: "LOST"}}})
 	if !store.IsExclusionViolation(err) {
 		t.Fatalf("overlapping gap: %v, want exclusion violation", err)
+	}
+}
+
+// storedSeqs returns the seq ranges of the device's chunks.
+func storedSeqs(t *testing.T, db *store.DB, f fixture) [][2]uint64 {
+	t.Helper()
+	var out [][2]uint64
+	err := db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
+		list, err := tx.ChunksBySeq(ctx, f.device, 0, 1000)
+		for _, c := range list {
+			out = append(out, [2]uint64{c.SeqLo, c.SeqHi})
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// TestIngestBatchIsAtomic checks the pipelined batch transaction: when one
+// statement fails, nothing of the batch is stored, even the statements
+// queued before it; the connection goes back to the pool usable, and the
+// device row is not left locked.
+func TestIngestBatchIsAtomic(t *testing.T) {
+	db := storetest.AppDB(t)
+	f := newFixture(t, db)
+	// A good chunk, then one that overlaps the fixture's 1-10.
+	err := write(t, db, f, store.IngestWrite{Chunks: []store.Chunk{f.chunk(20, 29), f.chunk(9, 15)},
+		UpdateProgress: true, AckedThrough: 29, BatchAt: time.Now()})
+	if !store.IsExclusionViolation(err) {
+		t.Fatalf("got %v, want exclusion violation", err)
+	}
+	if got := storedSeqs(t, db, f); !slices.Equal(got, [][2]uint64{{1, 10}}) {
+		t.Fatalf("after the failed batch the device has chunks %v, want only 1-10", got)
+	}
+	// An error from decide rolls back as well.
+	boom := errors.New("boom")
+	err = db.IngestBatch(t.Context(), f.device, f.tenant, func(store.IngestState) (store.IngestWrite, error) {
+		return store.IngestWrite{Chunks: []store.Chunk{f.chunk(20, 29)}}, boom
+	})
+	if !errors.Is(err, boom) {
+		t.Fatalf("got %v, want the decide error", err)
+	}
+	// Every connection of a small pool is reused: none was left inside a
+	// transaction holding the row lock, so these do not block.
+	small, err := store.Connect(t.Context(), storetest.Start(t).AppURL, store.Options{MaxConns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer small.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	for i := range 5 {
+		err := small.IngestBatch(ctx, f.device, f.tenant, func(store.IngestState) (store.IngestWrite, error) {
+			return store.IngestWrite{Chunks: []store.Chunk{f.chunk(5, 12)}}, nil
+		})
+		if !store.IsExclusionViolation(err) {
+			t.Fatalf("round %d: %v, want exclusion violation", i, err)
+		}
+	}
+	if err := write(t, db, f, store.IngestWrite{Chunks: []store.Chunk{f.chunk(20, 29)}, ReplaceRanges: true,
+		Ranges: []coverage.Range{{Lo: 20, Hi: 29}}}); err != nil {
+		t.Fatal(err)
+	}
+	var ranges []coverage.Range
+	err = db.IngestBatch(t.Context(), f.device, f.tenant, func(st store.IngestState) (store.IngestWrite, error) {
+		ranges = st.Ranges
+		return store.IngestWrite{}, nil
+	})
+	if err != nil || !slices.Equal(ranges, []coverage.Range{{Lo: 20, Hi: 29}}) {
+		t.Fatalf("ranges read back = %v, %v", ranges, err)
+	}
+}
+
+// TestIngestBatchLocksTheDevice checks what exactly-once rests on: while one
+// batch transaction is between its read and its write, another one for the
+// same device waits, and then reads what the first one wrote.
+func TestIngestBatchLocksTheDevice(t *testing.T) {
+	db := storetest.AppDB(t)
+	f := newFixture(t, db)
+	inDecide, release := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- db.IngestBatch(t.Context(), f.device, f.tenant, func(store.IngestState) (store.IngestWrite, error) {
+			close(inDecide)
+			<-release
+			return store.IngestWrite{UpdateProgress: true, AckedThrough: 10, BatchAt: time.Now()}, nil
+		})
+	}()
+	<-inDecide
+	seen := make(chan uint64, 1)
+	second := make(chan error, 1)
+	go func() {
+		second <- db.IngestBatch(t.Context(), f.device, f.tenant, func(st store.IngestState) (store.IngestWrite, error) {
+			seen <- st.Device.AckedThrough
+			return store.IngestWrite{}, nil
+		})
+	}()
+	select {
+	case w := <-seen:
+		t.Fatalf("the second transaction read the device (watermark %d) while the first held it", w)
+	case <-time.After(500 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if w := <-seen; w != 10 {
+		t.Fatalf("the second transaction read watermark %d, want the first one's 10", w)
+	}
+	// A device nobody enrolled is reported as not found, without an error.
+	var found bool
+	err := db.IngestBatch(t.Context(), uuid.New(), f.tenant, func(st store.IngestState) (store.IngestWrite, error) {
+		found = st.Found
+		return store.IngestWrite{}, nil
+	})
+	if err != nil || found {
+		t.Fatalf("unknown device: found %v, %v", found, err)
 	}
 }
 

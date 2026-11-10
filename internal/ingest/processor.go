@@ -54,10 +54,10 @@ type Outcome struct {
 	Detail string
 }
 
-// ErrOverlap means the exclusion constraint rejected a chunk: a bug in the
-// coverage logic, never expected. The batch goes to the DLQ; no data is
-// lost because the device resends.
-var ErrOverlap = errors.New("ingest: chunk overlaps stored data")
+// ErrOverlap means an exclusion constraint rejected a chunk or a gap: a bug
+// in the coverage logic, never expected. The batch goes to the DLQ; no data
+// is lost because the device resends.
+var ErrOverlap = errors.New("ingest: chunk or gap overlaps stored data")
 
 // Metrics are the ingest metrics (R13.1).
 type Metrics struct {
@@ -95,7 +95,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		DBRetries: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_ingest_db_retries_total",
 			Help: "Batch transactions retried after a database error."}),
 		Overlaps: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_ingest_exclusion_violations_total",
-			Help: "Chunks rejected by the overlap constraint. Must stay 0."}),
+			Help: "Batches whose chunk or gap the overlap constraints rejected. Must stay 0."}),
 	}
 	reg.MustRegister(m.Batches, m.ReadingsStored, m.GapSeqs, m.E2EDelay, m.TxSeconds, m.Skew, m.NegativeDelay, m.DBRetries, m.Overlaps)
 	// Every result exists from the start at 0, so the dead-letter SLI is a
@@ -176,32 +176,28 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 	start := p.now()
 	var stored []*fleetwirev1.StoredReading
 	sealed := 0
-	err = p.db.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
-		stored, sealed = nil, 0
-		dev, err := tx.DeviceForIngest(ctx, device)
-		if errors.Is(err, store.ErrNotFound) {
+	var wm uint64
+	var covered []coverage.Range
+	err = p.db.IngestBatch(ctx, device, tenant, func(st store.IngestState) (store.IngestWrite, error) {
+		var w store.IngestWrite
+		if !st.Found {
 			out.Result = ResultDroppedUnknown
-			return nil
+			return w, nil
 		}
-		if err != nil {
-			return err
-		}
+		dev := st.Device
 		if dev.TenantID != tenant {
-			return fmt.Errorf("device %s moved from tenant %s to %s; refusing", device, tenant, dev.TenantID)
-		}
-		if err := tx.SetTenant(ctx, tenant); err != nil {
-			return err
+			return w, fmt.Errorf("device %s moved from tenant %s to %s; refusing", device, tenant, dev.TenantID)
 		}
 		if dev.DeviceStatus != store.DeviceActive || dev.TenantStatus != store.TenantActive {
 			// Revocation is effective from its commit on (R4.6, layer 1).
 			out.Result = ResultDroppedRevoked
-			return p.auditDropTx(ctx, tx, device, "device "+dev.DeviceStatus+", tenant "+dev.TenantStatus)
+			if p.shouldAudit(device) {
+				a := dropAudit(device, "device "+dev.DeviceStatus+", tenant "+dev.TenantStatus)
+				w.Audit = &a
+			}
+			return w, nil
 		}
-		wm := dev.AckedThrough
-		covered, err := tx.DeviceRanges(ctx, device)
-		if err != nil {
-			return err
-		}
+		wm, covered = dev.AckedThrough, st.Ranges
 		var added []coverage.Range
 		if n := len(batch.GetReadings()); n > 0 {
 			first := batch.GetFirstSeq()
@@ -214,15 +210,9 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 				}
 				c, err := chunks.Seal(dek, tenant, device, keyID, rs)
 				if err != nil {
-					return err
+					return store.IngestWrite{}, err
 				}
-				if err := tx.InsertChunk(ctx, c); err != nil {
-					if store.IsExclusionViolation(err) {
-						return fmt.Errorf("%w: device %s range %d-%d, watermark %d, covered %v: %w", ErrOverlap, device, r.Lo, r.Hi, wm, covered, err)
-					}
-					return err
-				}
-				sealed++
+				w.Chunks = append(w.Chunks, c)
 				stored = append(stored, rs...)
 				added = append(added, r)
 			}
@@ -230,33 +220,29 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 		var gapSeqs uint64
 		for _, g := range batch.GetGaps() {
 			for _, r := range coverage.Uncovered(g.GetFromSeq(), g.GetToSeq(), wm, slices.Concat(covered, added)) {
-				if err := tx.InsertGap(ctx, store.DeviceGap{DeviceID: device, FromSeq: r.Lo, ToSeq: r.Hi, Reason: gapReasons[g.GetReason()]}); err != nil {
-					return err
-				}
+				w.Gaps = append(w.Gaps, store.DeviceGap{DeviceID: device, FromSeq: r.Lo, ToSeq: r.Hi, Reason: gapReasons[g.GetReason()]})
 				added = append(added, r)
 				gapSeqs += r.Len()
 			}
 		}
 		newWM, remaining := coverage.Advance(wm, covered, added)
-		if len(added) > 0 {
-			if err := tx.ReplaceDeviceRanges(ctx, device, remaining); err != nil {
-				return err
-			}
-		}
-		if err := tx.UpdateDeviceProgress(ctx, device, newWM, receivedAt); err != nil {
-			return err
-		}
+		w.ReplaceRanges, w.Ranges = len(added) > 0, remaining
+		w.UpdateProgress, w.AckedThrough, w.BatchAt = true, newWM, receivedAt
+		sealed = len(w.Chunks)
 		out.Ack, out.AckThrough, out.Stored, out.GapSeqs = true, newWM, len(stored), gapSeqs
 		out.Result = ResultDuplicate
 		if len(added) > 0 {
 			out.Result = ResultStored
 		}
-		return nil
+		return w, nil
 	})
 	p.m.TxSeconds.Observe(p.now().Sub(start).Seconds())
 	if err != nil {
-		if errors.Is(err, ErrOverlap) {
+		if store.IsExclusionViolation(err) {
+			// The chunks and gaps were computed as the uncovered parts, so an
+			// overlap is a bug in the coverage logic.
 			p.m.Overlaps.Inc()
+			err = fmt.Errorf("%w: device %s, watermark %d, covered %v: %w", ErrOverlap, device, wm, covered, err)
 		}
 		return Outcome{Device: device}, err
 	}
@@ -309,13 +295,6 @@ func dropAudit(device uuid.UUID, why string) store.Audit {
 	return store.Audit{ActorType: store.ActorSystem, ActorID: "ingest", Action: "ingest.drop",
 		TargetType: "device", TargetID: device.String(), Result: store.ResultDenied,
 		Details: map[string]any{"reason": why, "rate_limited": auditEvery.String()}}
-}
-
-func (p *Processor) auditDropTx(ctx context.Context, tx *store.Tx, device uuid.UUID, why string) error {
-	if !p.shouldAudit(device) {
-		return nil
-	}
-	return tx.InsertAudit(ctx, dropAudit(device, why))
 }
 
 // auditDrop writes a fleet-wide entry for a device the registry does not know.

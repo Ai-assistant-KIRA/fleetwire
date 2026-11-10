@@ -21,21 +21,26 @@ type Audit struct {
 
 // InsertAudit appends an audit entry.
 func (t *Tx) InsertAudit(ctx context.Context, a Audit) error {
-	details := []byte("{}")
-	if len(a.Details) > 0 {
-		var err error
-		if details, err = json.Marshal(a.Details); err != nil {
-			return fmt.Errorf("encode audit details: %w", err)
-		}
-	}
-	_, err := t.tx.Exec(ctx, `
-		INSERT INTO fleetwire.audit_log (tenant_id, actor_type, actor_id, action, target_type, target_id, result, details)
-		VALUES (fleetwire.current_tenant(), $1, $2, $3, $4, $5, $6, $7)`,
-		a.ActorType, a.ActorID, a.Action, a.TargetType, a.TargetID, a.Result, details)
+	details, err := a.detailsJSON()
 	if err != nil {
+		return err
+	}
+	if _, err := t.tx.Exec(ctx, sqlInsertAudit, a.ActorType, a.ActorID, a.Action, a.TargetType, a.TargetID, a.Result, details); err != nil {
 		return fmt.Errorf("insert audit entry: %w", err)
 	}
 	return nil
+}
+
+// detailsJSON encodes Details for the details column.
+func (a Audit) detailsJSON() ([]byte, error) {
+	if len(a.Details) == 0 {
+		return []byte("{}"), nil
+	}
+	b, err := json.Marshal(a.Details)
+	if err != nil {
+		return nil, fmt.Errorf("encode audit details: %w", err)
+	}
+	return b, nil
 }
 
 const auditCols = `id, tenant_id, at, actor_type, actor_id, action, target_type, target_id, result, details`

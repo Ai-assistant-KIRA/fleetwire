@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -96,16 +95,6 @@ func (t *Tx) DeleteDevices(ctx context.Context, limit int) (int64, error) {
 	return tag.RowsAffected(), nil
 }
 
-// DeviceForIngest looks up a device without a tenant context and locks its
-// row until the transaction ends (SECURITY DEFINER).
-func (t *Tx) DeviceForIngest(ctx context.Context, id uuid.UUID) (IngestDevice, error) {
-	v, err := one[IngestDevice](t.tx.Query(ctx, `SELECT * FROM fleetwire.device_for_ingest($1)`, id))
-	if err != nil {
-		return IngestDevice{}, fmt.Errorf("device for ingest: %w", err)
-	}
-	return v, nil
-}
-
 // DeviceLookup finds a device's tenant and state without a tenant context.
 func (t *Tx) DeviceLookup(ctx context.Context, id uuid.UUID) (DeviceRef, error) {
 	v, err := one[DeviceRef](t.tx.Query(ctx, `SELECT * FROM fleetwire.device_lookup($1)`, id))
@@ -113,17 +102,6 @@ func (t *Tx) DeviceLookup(ctx context.Context, id uuid.UUID) (DeviceRef, error) 
 		return DeviceRef{}, fmt.Errorf("device lookup: %w", err)
 	}
 	return v, nil
-}
-
-// UpdateDeviceProgress records the new watermark after a stored batch.
-func (t *Tx) UpdateDeviceProgress(ctx context.Context, id uuid.UUID, acked uint64, batchAt time.Time) error {
-	_, err := t.tx.Exec(ctx, `
-		UPDATE fleetwire.devices SET acked_through = $2, last_seen_at = now(), last_batch_at = $3
-		WHERE id = $1`, id, acked, batchAt)
-	if err != nil {
-		return fmt.Errorf("update device progress: %w", err)
-	}
-	return nil
 }
 
 // SetDeviceCert records the device's current certificate.

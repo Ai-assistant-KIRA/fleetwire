@@ -41,7 +41,7 @@ Per-device state is in the API (`GET /v1/devices/{id}`).
 | `tx_seconds` | histogram | | one batch transaction |
 | `consumer_lag` | gauge | partition | records between the committed offset and the log end, for the partitions this instance owns (every 10 s) |
 | `db_retries_total` | counter | | batch transactions retried |
-| `exclusion_violations_total` | counter | | overlapping chunk rejected; must stay 0 |
+| `exclusion_violations_total` | counter | | batches whose chunk or gap overlapped stored data; must stay 0 |
 | `clock_skew_seconds` | histogram | | abs(bridge receive time - device send time) |
 | `negative_delay_total` | counter | | readings timestamped in the future |
 | `acks_published_total`, `ack_publish_errors_total`, `pending_acks` | | | end-to-end ack publishing |
