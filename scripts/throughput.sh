@@ -16,7 +16,9 @@
 # (OUT overrides the path).
 #
 # Needs the Compose stack (make up) and bin/ (make build). Devices are
-# enrolled once and resumed from their state directory in later steps.
+# enrolled once and resumed from their state directory (STATE_DIR, default
+# .cache/throughput; put it on tmpfs to keep the devices' fsyncs off the
+# database's disk) in later steps.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -44,11 +46,21 @@ if [ ! -s "$state/tenant-token" ]; then
     -scopes devices:read,devices:admin,readings:read | jq -r .token > "$state/tenant-token"
 fi
 
+mkdir -p "$state"
+# As in the chaos tables: on one machine every device's fsyncs reach the
+# same disk as PostgreSQL's, unless the state is on tmpfs.
+if [ "$(stat -f -c %T "$state")" = tmpfs ]; then
+  where="on tmpfs ($state): the devices' fsyncs do not reach a disk"
+else
+  where="on disk ($state), shared by every device"
+fi
+
 search() {
   echo "# Throughput search, $(date -u '+%Y-%m-%d %H:%M UTC')"
   echo
   echo "Machine: $(nproc) vCPU $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs), $(free -g | awk '/Mem:/ {print $2}') GiB RAM; load generator and backend on the same machine."
   echo "Commit: ${commit}, written by \`scripts/throughput.sh\`, ${step_s} s per step, rates over the last 2 minutes of each step."
+  echo "Device state: ${where}."
   echo
   echo "| Devices | Offered batches/s | Offered readings/s | Stored readings/s | Lag (records) | Lag slope (records/s) | p99 delay | Kept up |"
   echo "|---:|---:|---:|---:|---:|---:|---:|---|"
