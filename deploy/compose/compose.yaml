@@ -76,7 +76,15 @@ services:
     networks: [fleetwire]
     environment:
       POSTGRES_PASSWORD: postgres
-    command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=512MB", "-c", "synchronous_commit=on"]
+    # synchronous_commit stays on: ingest acks a batch once its commit
+    # returns, so a commit must be on disk by then. The rest is for the
+    # write-heavy load tests: fewer checkpoints and compressed WAL mean fewer
+    # and smaller full-page images, and commit_delay lets concurrent commits
+    # share one WAL flush (it only waits while 10 other transactions are
+    # active).
+    command: ["postgres", "-c", "max_connections=200", "-c", "shared_buffers=512MB", "-c", "synchronous_commit=on",
+      "-c", "wal_compression=lz4", "-c", "max_wal_size=4GB", "-c", "checkpoint_timeout=15min",
+      "-c", "commit_delay=1000", "-c", "commit_siblings=10"]
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/10-fleetwire.sql:ro
