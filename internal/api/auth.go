@@ -37,8 +37,9 @@ func (p *principal) has(scope string) bool { return slices.Contains(p.scopes, sc
 // authenticate resolves the bearer token. Every failure looks the same to
 // the client: which part was wrong is not revealed.
 func (s *Server) authenticate(r *http.Request) (*principal, *apiError) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	if !ok {
+	// The scheme name is case-insensitive (RFC 9110, section 11.1).
+	scheme, raw, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return nil, errUnauthorized
 	}
 	tok, err := tokens.Parse(strings.TrimSpace(raw))

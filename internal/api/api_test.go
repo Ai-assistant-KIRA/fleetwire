@@ -400,6 +400,27 @@ func TestEnrollmentTokenTTLOutOfRange(t *testing.T) {
 	}
 }
 
+// RFC 9110 section 11.1: the authentication scheme is case-insensitive.
+func TestBearerSchemeIsCaseInsensitive(t *testing.T) {
+	h := apitest.New(t)
+	_, tok := h.CreateTenant("bearer")
+	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
+		req, err := http.NewRequestWithContext(t.Context(), "GET", h.Public.URL+"/v1/tenant", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", scheme+" "+tok)
+		resp, err := h.Client(nil).Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("scheme %q: status %d, want 200", scheme, resp.StatusCode)
+		}
+	}
+}
+
 func TestExportDownloadAndRetention(t *testing.T) {
 	h := apitest.New(t)
 	tenant, tok := h.CreateTenant("exporter")
