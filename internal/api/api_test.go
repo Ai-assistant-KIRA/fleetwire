@@ -333,6 +333,61 @@ func TestReadingsPagingAndFilters(t *testing.T) {
 	}
 }
 
+// With only to given, the default window is the 24 hours before to.
+func TestReadingsWindowEndsAtTo(t *testing.T) {
+	h := apitest.New(t)
+	tenant, tok := h.CreateTenant("readings-to")
+	dev := h.Enroll(h.EnrollmentTokens(tok, 1)[0])
+	base := time.Now().Add(-72 * time.Hour).Truncate(time.Second)
+	storeReadings(t, h, tenant, dev.ID, 1, 5, func(seq uint64) time.Time { return base.Add(time.Duration(seq) * time.Second) },
+		"cpu.utilization")
+
+	var pg struct {
+		Items []struct {
+			Seq uint64 `json:"seq"`
+		} `json:"items"`
+	}
+	to := base.Add(time.Minute).UTC().Format(time.RFC3339)
+	resp, body := h.Do("GET", "/v1/devices/"+dev.ID.String()+"/readings?to="+to, tok, nil)
+	h.MustJSON(resp, body, http.StatusOK, &pg)
+	if len(pg.Items) != 5 {
+		t.Fatalf("readings up to %s = %+v, want seqs 1 to 5", to, pg.Items)
+	}
+}
+
+// A window wider than int64 nanoseconds can hold must page as one window.
+func TestReadingsCursorKeepsAWideWindow(t *testing.T) {
+	h := apitest.New(t)
+	tenant, tok := h.CreateTenant("readings-wide")
+	dev := h.Enroll(h.EnrollmentTokens(tok, 1)[0])
+	base := time.Now().Add(-time.Hour).Truncate(time.Second)
+	storeReadings(t, h, tenant, dev.ID, 1, 10, func(seq uint64) time.Time { return base.Add(time.Duration(seq) * time.Second) },
+		"cpu.utilization")
+
+	var seqs []uint64
+	path := "/v1/devices/" + dev.ID.String() + "/readings?limit=3&from=0001-01-01T00:00:00Z&to=9999-12-31T23:59:59Z"
+	for path != "" {
+		var pg struct {
+			Items []struct {
+				Seq uint64 `json:"seq"`
+			} `json:"items"`
+			NextCursor string `json:"next_cursor"`
+		}
+		resp, body := h.Do("GET", path, tok, nil)
+		h.MustJSON(resp, body, http.StatusOK, &pg)
+		for _, it := range pg.Items {
+			seqs = append(seqs, it.Seq)
+		}
+		path = ""
+		if pg.NextCursor != "" {
+			path = "/v1/devices/" + dev.ID.String() + "/readings?limit=3&cursor=" + pg.NextCursor
+		}
+	}
+	if len(seqs) != 10 {
+		t.Fatalf("paged through seqs %v, want 1 to 10", seqs)
+	}
+}
+
 func TestExportDownloadAndRetention(t *testing.T) {
 	h := apitest.New(t)
 	tenant, tok := h.CreateTenant("exporter")

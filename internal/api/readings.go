@@ -24,7 +24,6 @@ func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *princip
 	}
 	q := r.URL.Query()
 	to := s.now().UTC()
-	from := to.Add(-24 * time.Hour)
 	var problems []string
 	if v := q.Get("to"); v != "" {
 		t, err := time.Parse(time.RFC3339Nano, v)
@@ -33,6 +32,7 @@ func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *princip
 		}
 		to = t
 	}
+	from := to.Add(-24 * time.Hour)
 	if v := q.Get("from"); v != "" {
 		t, err := time.Parse(time.RFC3339Nano, v)
 		if err != nil {
@@ -56,11 +56,13 @@ func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *princip
 	}
 	// The cursor carries the window it was issued for: with the default
 	// window ("the last 24 hours"), "now" moves between pages.
+	// The times are kept as time.Time: UnixNano cannot hold dates outside
+	// 1678 to 2262, which clients send as open bounds.
 	type cursor struct {
-		AfterSeq uint64 `json:"s"`
-		From     int64  `json:"f"`
-		To       int64  `json:"t"`
-		Metric   string `json:"m"`
+		AfterSeq uint64    `json:"s"`
+		From     time.Time `json:"f"`
+		To       time.Time `json:"t"`
+		Metric   string    `json:"m"`
 	}
 	scope := fmt.Sprintf("readings:%s:%s", p.tenant, device)
 	var cur cursor
@@ -68,12 +70,12 @@ func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *princip
 		if err := s.cur.decode(scope, c, &cur); err != nil {
 			return errBadRequest("invalid cursor")
 		}
-		explicit := (q.Get("from") != "" && from.UnixNano() != cur.From) ||
-			(q.Get("to") != "" && to.UnixNano() != cur.To) || (metric != "" && metric != cur.Metric)
+		explicit := (q.Get("from") != "" && !from.Equal(cur.From)) ||
+			(q.Get("to") != "" && !to.Equal(cur.To)) || (metric != "" && metric != cur.Metric)
 		if explicit {
 			return errBadRequest("the cursor belongs to a different query")
 		}
-		from, to, metric = time.Unix(0, cur.From).UTC(), time.Unix(0, cur.To).UTC(), cur.Metric
+		from, to, metric = cur.From.UTC(), cur.To.UTC(), cur.Metric
 	}
 
 	err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
@@ -137,7 +139,7 @@ func (s *Server) listReadings(w http.ResponseWriter, r *http.Request, p *princip
 		}
 	}
 	if len(out.Items) == limit {
-		c, err := s.cur.encode(scope, cursor{AfterSeq: after, From: from.UnixNano(), To: to.UnixNano(), Metric: metric})
+		c, err := s.cur.encode(scope, cursor{AfterSeq: after, From: from, To: to, Metric: metric})
 		if err != nil {
 			return s.internal(r, err)
 		}
