@@ -56,6 +56,8 @@ jobs:
           breaking: ${{ github.event_name == 'pull_request' }}
           breaking_against: ${{ github.event.repository.clone_url }}#branch=main
           push: false
+          # Commenting needs pull-requests: write; the results are in the job.
+          pr_comment: false
 
   charms:
     runs-on: ubuntu-24.04
