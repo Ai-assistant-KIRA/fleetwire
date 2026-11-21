@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/crl"
 )
 
 // apiConfig is every setting of fleetwire-api. `fleetwire-api config-docs`
@@ -37,7 +39,7 @@ type apiConfig struct {
 	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600)."`
 
 	CRLFile     string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
-	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation."`
+	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. Must be shorter than the CRL's 7-day validity."`
 	ExportDir   string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
 
 	RateLimit       float64       `env:"FLEETWIRE_API_RATE_LIMIT" flag:"rate-limit" default:"20" help:"Requests per second per token."`
@@ -79,6 +81,9 @@ func (c *apiConfig) Validate() []error {
 		need(c.ExportDir, "FLEETWIRE_EXPORT_DIR")
 		if c.InternalListen != "" {
 			need(c.ServiceTrustFile, "FLEETWIRE_SERVICE_TRUST_FILE (with FLEETWIRE_API_INTERNAL_LISTEN)")
+		}
+		if c.CRLInterval <= 0 || c.CRLInterval >= crl.Validity {
+			errs = append(errs, errors.New("FLEETWIRE_CRL_INTERVAL must be positive and shorter than the CRL's validity of "+crl.Validity.String()))
 		}
 		if c.JobWorkers < 0 {
 			errs = append(errs, errors.New("FLEETWIRE_JOB_WORKERS must not be negative"))
