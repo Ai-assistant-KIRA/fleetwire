@@ -3,6 +3,7 @@ bin
 dist
 deploy/compose/secrets
 deploy/compose/.state
+deploy/ubuntu-core/work
 test/e2e/.state
 docs/_build
 # Raw chaos-run artifacts: hundreds of thousands of small files per run.
