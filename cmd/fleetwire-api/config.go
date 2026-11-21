@@ -3,9 +3,12 @@ package main
 import (
 	"errors"
 	"time"
-
-	"github.com/Ai-assistant-KIRA/fleetwire/internal/crl"
 )
+
+// maxCRLInterval is the daily republish that ADR-0010 and threat-model D4
+// rely on. Publisher.Run waits the interval after each publish finishes, so
+// a longer interval would stretch the gap past a day.
+const maxCRLInterval = 24 * time.Hour
 
 // apiConfig is every setting of fleetwire-api. `fleetwire-api config-docs`
 // renders it; `make docs-reference` puts it in docs/reference/configuration.md.
@@ -39,7 +42,7 @@ type apiConfig struct {
 	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600)."`
 
 	CRLFile     string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
-	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. Must be shorter than the CRL's 7-day validity."`
+	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h (the design republishes it daily)."`
 	ExportDir   string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
 
 	RateLimit       float64       `env:"FLEETWIRE_API_RATE_LIMIT" flag:"rate-limit" default:"20" help:"Requests per second per token."`
@@ -82,8 +85,8 @@ func (c *apiConfig) Validate() []error {
 		if c.InternalListen != "" {
 			need(c.ServiceTrustFile, "FLEETWIRE_SERVICE_TRUST_FILE (with FLEETWIRE_API_INTERNAL_LISTEN)")
 		}
-		if c.CRLInterval <= 0 || c.CRLInterval >= crl.Validity {
-			errs = append(errs, errors.New("FLEETWIRE_CRL_INTERVAL must be positive and shorter than the CRL's validity of "+crl.Validity.String()))
+		if c.CRLInterval <= 0 || c.CRLInterval > maxCRLInterval {
+			errs = append(errs, errors.New("FLEETWIRE_CRL_INTERVAL must be positive and at most 24h"))
 		}
 		if c.JobWorkers < 0 {
 			errs = append(errs, errors.New("FLEETWIRE_JOB_WORKERS must not be negative"))
