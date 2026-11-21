@@ -405,7 +405,7 @@ func TestBearerSchemeIsCaseInsensitive(t *testing.T) {
 	h := apitest.New(t)
 	_, tok := h.CreateTenant("bearer")
 	for _, scheme := range []string{"Bearer", "bearer", "BEARER"} {
-		req, err := http.NewRequestWithContext(t.Context(), "GET", h.Public.URL+"/v1/tenant", nil)
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, h.Public.URL+"/v1/tenant", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
