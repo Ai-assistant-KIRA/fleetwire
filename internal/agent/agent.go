@@ -187,7 +187,9 @@ func (d *Device) Run(ctx context.Context) error {
 	collectCtx, stopCollect := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	sampler := NewSampler(d.opts.Collectors, c.CollectInterval/2, d.opts.Metrics, d.lg)
-	wg.Go(func() { d.collectLoop(collectCtx, sampler) })
+	// collectLoop gets its own logger: enroll replaces d.lg concurrently.
+	lg := d.lg
+	wg.Go(func() { d.collectLoop(collectCtx, sampler, lg) })
 	wg.Go(func() { d.statsLoop(collectCtx) })
 
 	err := d.enroll(ctx)
@@ -390,7 +392,7 @@ func (d *Device) renewLoop(ctx context.Context) {
 	}
 }
 
-func (d *Device) collectLoop(ctx context.Context, s *Sampler) {
+func (d *Device) collectLoop(ctx context.Context, s *Sampler, lg *slog.Logger) {
 	t := time.NewTicker(d.opts.Config.CollectInterval)
 	defer t.Stop()
 	var lastErrLog time.Time
@@ -404,7 +406,7 @@ func (d *Device) collectLoop(ctx context.Context, s *Sampler) {
 				d.opts.Metrics.AppendErrors.Inc()
 				if time.Since(lastErrLog) > time.Minute {
 					lastErrLog = time.Now()
-					d.lg.Error("cannot write to the local log", "err", err)
+					lg.Error("cannot write to the local log", "err", err)
 					d.opts.Health.Set("error", "local log is not writable")
 				}
 			}
