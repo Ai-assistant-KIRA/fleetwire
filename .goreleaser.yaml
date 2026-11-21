@@ -49,11 +49,12 @@ sboms:
   - artifacts: archive
 
 # Keyless: the signing certificate names this repository's release workflow.
+# cosign 3 writes the signature and certificate into one Sigstore bundle and
+# refuses sign-blob without --bundle.
 signs:
   - cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
-    args: ["sign-blob", "--yes", "--output-signature=${signature}", "--output-certificate=${certificate}", "${artifact}"]
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--yes", "--bundle=${signature}", "${artifact}"]
     artifacts: checksum
 
 dockers_v2:
