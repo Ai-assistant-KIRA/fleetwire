@@ -21,6 +21,18 @@ jobs:
           fetch-depth: 0
       - uses: snapcore/action-build@3bdaa03e1ba6bf59a65f84a751d943d549a54e79 # v1.3.0
         id: snap
+      - name: Check packaged binary version
+        env:
+          SNAP_FILE: ${{ steps.snap.outputs.snap }}
+        run: |
+          snap_version=$(unsquashfs -cat "$SNAP_FILE" meta/snap.yaml | awk '$1 == "version:" { print $2; exit }')
+          unsquashfs -cat "$SNAP_FILE" bin/fleetwire-agent > "$RUNNER_TEMP/fleetwire-agent"
+          chmod +x "$RUNNER_TEMP/fleetwire-agent"
+          binary_version=$("$RUNNER_TEMP/fleetwire-agent" version | awk '{ print $1 }')
+          test "$binary_version" = "$snap_version" || {
+            echo "snap version $snap_version does not match binary version $binary_version"
+            exit 1
+          }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: snap-${{ matrix.runner }}
