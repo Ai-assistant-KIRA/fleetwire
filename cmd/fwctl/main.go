@@ -246,6 +246,9 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 		"enroll-token create": func(ctx context.Context, _ []string) error {
 			body := map[string]any{"count": *count}
 			if *ttl != 0 {
+				if *ttl%time.Second != 0 {
+					return errors.New("-ttl must be a whole number of seconds")
+				}
 				body["ttl_seconds"] = int(ttl.Seconds())
 			}
 			path := "/v1/enrollment-tokens"
