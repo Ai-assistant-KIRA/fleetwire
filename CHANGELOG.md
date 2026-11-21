@@ -6,7 +6,9 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-The first version; nothing has been released yet.
+## [0.1.0] - 2026-11-21
+
+The first release.
 
 ### Added
 
@@ -45,4 +47,5 @@ The first version; nothing has been released yet.
 - CI with pinned actions, release builds with GoReleaser, SPDX SBOMs and
   cosign keyless signatures, and Sphinx documentation in the Diátaxis layout.
 
-[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/commits/main
+[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Ai-assistant-KIRA/fleetwire/releases/tag/v0.1.0
