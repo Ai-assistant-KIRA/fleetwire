@@ -228,7 +228,7 @@ paths:
     get:
       tags: [readings]
       operationId: listReadings
-      description: "Scope: readings:read. Readings in seq order, which is collection order. Default window: the last 24 hours."
+      description: "Scope: readings:read. Readings in seq order, which is collection order. Without from, the window starts 24 hours before to, which defaults to now."
       parameters:
         - {$ref: "#/components/parameters/id"}
         - {name: from, in: query, schema: {type: string, format: date-time}}
