@@ -267,11 +267,13 @@ func (s *Server) issueEnrollmentTokens(w http.ResponseWriter, r *http.Request, t
 	if req.Count == 0 {
 		req.Count = 1
 	}
+	// Checked in seconds: a large value would overflow time.Duration.
+	ttlOK := req.TTLSeconds == 0 || (req.TTLSeconds >= 60 && req.TTLSeconds <= 86400)
 	ttl := s.cfg.EnrollTokenTTL
-	if req.TTLSeconds != 0 {
+	if ttlOK && req.TTLSeconds != 0 {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
 	}
-	if req.Count < 1 || req.Count > 1000 || ttl < time.Minute || ttl > 24*time.Hour {
+	if !ttlOK || req.Count < 1 || req.Count > 1000 || ttl < time.Minute || ttl > 24*time.Hour {
 		return errBadRequest("count must be 1 to 1000 and ttl_seconds 60 to 86400")
 	}
 	expires := s.now().Add(ttl).UTC().Truncate(time.Second)

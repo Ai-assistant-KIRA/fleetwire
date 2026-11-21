@@ -388,6 +388,18 @@ func TestReadingsCursorKeepsAWideWindow(t *testing.T) {
 	}
 }
 
+func TestEnrollmentTokenTTLOutOfRange(t *testing.T) {
+	h := apitest.New(t)
+	_, tok := h.CreateTenant("ttl")
+	// 18446744783 s overflows time.Duration to about 709 s.
+	for _, ttl := range []int64{59, 86401, 18446744783, -1} {
+		resp, body := h.Do("POST", "/v1/enrollment-tokens", tok, map[string]any{"ttl_seconds": ttl})
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("ttl_seconds %d: status %d, want 400: %s", ttl, resp.StatusCode, body)
+		}
+	}
+}
+
 func TestExportDownloadAndRetention(t *testing.T) {
 	h := apitest.New(t)
 	tenant, tok := h.CreateTenant("exporter")
