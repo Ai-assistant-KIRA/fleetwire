@@ -125,6 +125,11 @@ $ sudo snap set fleetwire-agent enroll.url=https://api.example.com:8444 enroll.t
 On Kubernetes, the Juju charms deploy the backend with Charmed PostgreSQL
 and Charmed Kafka: [Deploy with Juju](docs/how-to/deploy-with-juju.md).
 
+Tagged releases attach Linux binaries, `fwctl` for Linux and macOS, SPDX
+SBOMs and a signed checksum file, and push the API, bridge and ingest
+images to GHCR. [Verify a release](docs/how-to/verify-a-release.md) shows
+how to check the signatures.
+
 ## What is in the repository
 
 | Path | What |
@@ -157,10 +162,9 @@ and Charmed Kafka: [Deploy with Juju](docs/how-to/deploy-with-juju.md).
   automated. The agent ran as the same strict snap on a real kernel and
   ext4, under QEMU without KVM; Ubuntu Core's own boot and partition layout
   were not tested.
-- **Nothing is published yet.** The snap is not in the Snap Store, the CI
-  and release workflows have not run on GitHub (they pass actionlint, and
-  `goreleaser release --snapshot` builds the archives, images and SBOMs),
-  and no release is signed or tagged.
+- **The agent snap is not in the Snap Store.** Build it with `make snap`
+  and install it with `--dangerous`. The release publishes binaries and
+  container images only.
 - **One API unit on Kubernetes.** The local keyring keeps the tenant KEKs
   on the unit's storage. A Vault or KMS keyring backend would lift this.
 - **Revocation at the broker lags on Kubernetes** by up to the
