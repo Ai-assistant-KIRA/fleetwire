@@ -117,3 +117,14 @@ func TestFwctlAgainstRealAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// ttl_seconds 0 means "the server default", so a sub-second -ttl must not
+// be truncated to it.
+func TestEnrollTokenTTLMustBeWholeSeconds(t *testing.T) {
+	env := map[string]string{"FWCTL_URL": "https://127.0.0.1:1", "FWCTL_TOKEN": "fwt_unused"}
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"enroll-token", "create", "-ttl", "500ms"}, func(k string) string { return env[k] }, &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "-ttl") {
+		t.Fatalf("-ttl 500ms: %v, want an error about -ttl", err)
+	}
+}
