@@ -15,14 +15,17 @@ func serveConfig() apiConfig {
 	}
 }
 
-// The broker rejects every device once the CRL's nextUpdate (7 days) passes,
-// and a zero interval rebuilds the CRL in a tight loop.
-func TestCRLIntervalMustBePositiveAndUnderTheValidity(t *testing.T) {
-	valid := serveConfig()
-	if errs := valid.Validate(); len(errs) != 0 {
-		t.Fatalf("valid config: %v", errs)
+// ADR-0010 and threat-model D4: the CRL is republished at least every 24
+// hours. A zero interval would rebuild it in a tight loop.
+func TestCRLIntervalIsPositiveAndAtMostADay(t *testing.T) {
+	for _, d := range []time.Duration{time.Nanosecond, time.Hour, 24 * time.Hour} {
+		c := serveConfig()
+		c.CRLInterval = d
+		if errs := c.Validate(); len(errs) != 0 {
+			t.Errorf("CRLInterval %v: %v, want no errors", d, errs)
+		}
 	}
-	for _, d := range []time.Duration{0, -time.Hour, 7 * 24 * time.Hour, 240 * time.Hour} {
+	for _, d := range []time.Duration{0, -time.Hour, 24*time.Hour + time.Nanosecond, 7*24*time.Hour - time.Nanosecond} {
 		c := serveConfig()
 		c.CRLInterval = d
 		errs := c.Validate()
