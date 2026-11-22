@@ -10,8 +10,8 @@ x-service: &service
   build:
     context: ../..
     dockerfile: Dockerfile
-  # Runs as the user who ran `make up`, so the bind-mounted dev secrets
-  # (mode 0400, owned by that user) are readable.
+  # Runs as the user who ran `make up`, so the dev secrets (mode 0400, owned
+  # by that user) are readable.
   user: "${FW_UID:-65532}:${FW_GID:-65532}"
   restart: unless-stopped
   networks: [fleetwire]
@@ -66,7 +66,7 @@ x-kafka: &kafka
 
 x-mqtt-env: &mqtt-env
   FLEETWIRE_MQTT_URL: tls://mosquitto:8884
-  FLEETWIRE_MQTT_CA_FILE: /secrets/ca-bundle.pem
+  FLEETWIRE_MQTT_CA_FILE: /run/secrets/ca-bundle.pem
   FLEETWIRE_KAFKA_BROKERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
 
 services:
@@ -123,6 +123,7 @@ services:
     networks: [fleetwire]
     user: "${FW_UID:-1883}:${FW_GID:-1883}"
     entrypoint: ["/bin/sh", "/etc/fleetwire/start.sh"]
+    secrets: [mosquitto.pem, mosquitto.key, device-trust.pem, service-trust.pem]
     ulimits:
       nofile: {soft: 1048576, hard: 1048576}
     volumes:
@@ -130,7 +131,6 @@ services:
       - ./mosquitto/acl-devices:/mosquitto/config/acl-devices:ro
       - ./mosquitto/acl-services:/mosquitto/config/acl-services:ro
       - ./mosquitto/start.sh:/etc/fleetwire/start.sh:ro
-      - ./secrets:/secrets:ro
       - ./.state/crl:/crl:ro
       - ./.state/mosquitto:/mosquitto/data
     healthcheck:
@@ -183,23 +183,25 @@ services:
       FLEETWIRE_API_PUBLIC_LISTEN: ":8443"
       FLEETWIRE_API_DEVICE_LISTEN: ":8444"
       FLEETWIRE_API_ADMIN_LISTEN: ":9090"
-      FLEETWIRE_API_TLS_CERT_FILE: /secrets/api.pem
-      FLEETWIRE_API_TLS_KEY_FILE: /secrets/api.key
-      FLEETWIRE_DEVICE_TRUST_FILE: /secrets/device-trust.pem
-      FLEETWIRE_DEVICE_CA_CERT_FILE: /secrets/device-ca.pem
-      FLEETWIRE_DEVICE_CA_KEY_FILE: /secrets/device-ca.key
-      FLEETWIRE_CA_BUNDLE_FILE: /secrets/ca-bundle.pem
+      FLEETWIRE_API_TLS_CERT_FILE: /run/secrets/api.pem
+      FLEETWIRE_API_TLS_KEY_FILE: /run/secrets/api.key
+      FLEETWIRE_DEVICE_TRUST_FILE: /run/secrets/device-trust.pem
+      FLEETWIRE_DEVICE_CA_CERT_FILE: /run/secrets/device-ca.pem
+      FLEETWIRE_DEVICE_CA_KEY_FILE: /run/secrets/device-ca.key
+      FLEETWIRE_CA_BUNDLE_FILE: /run/secrets/ca-bundle.pem
       FLEETWIRE_DEVICE_BROKER_URL: ${FLEETWIRE_DEVICE_BROKER_URL:-tls://localhost:18883}
       FLEETWIRE_DEVICE_API_URL: ${FLEETWIRE_DEVICE_API_URL:-https://localhost:8444}
       FLEETWIRE_KEYRING_DIR: /state/keyring
-      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /secrets/keyring-root.key
+      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /run/secrets/keyring-root.key
       FLEETWIRE_CRL_FILE: /state/crl/crl.pem
       FLEETWIRE_EXPORT_DIR: /state/exports
       # The load generator enrolls thousands of devices from one address.
       FLEETWIRE_API_ENROLL_RATE_LIMIT: "1000"
       FLEETWIRE_API_ENROLL_RATE_BURST: "2000"
+    # The API signs device certificates, so it is the one service with a CA
+    # private key.
+    secrets: [api.pem, api.key, device-trust.pem, device-ca.pem, device-ca.key, ca-bundle.pem, keyring-root.key]
     volumes:
-      - ./secrets:/secrets:ro
       - ./.state/keyring:/state/keyring
       - ./.state/crl:/state/crl
       - ./.state/exports:/state/exports
@@ -213,9 +215,9 @@ services:
     hostname: bridge-1
     environment: &bridge-env
       <<: [*env, *mqtt-env]
-      FLEETWIRE_MQTT_CERT_FILE: /secrets/bridge.pem
-      FLEETWIRE_MQTT_KEY_FILE: /secrets/bridge.key
-    volumes: [./secrets:/secrets:ro]
+      FLEETWIRE_MQTT_CERT_FILE: /run/secrets/bridge.pem
+      FLEETWIRE_MQTT_KEY_FILE: /run/secrets/bridge.key
+    secrets: [bridge.pem, bridge.key, ca-bundle.pem]
     ports: ["127.0.0.1:9101:9090"]
     depends_on:
       topics: {condition: service_completed_successfully}
@@ -238,12 +240,14 @@ services:
       # 2 x 72 connections fit postgres' max_connections=200 with the API.
       FLEETWIRE_INGEST_WORKERS: "64"
       FLEETWIRE_DATABASE_MAX_CONNS: "72"
-      FLEETWIRE_MQTT_CERT_FILE: /secrets/ingest.pem
-      FLEETWIRE_MQTT_KEY_FILE: /secrets/ingest.key
+      FLEETWIRE_MQTT_CERT_FILE: /run/secrets/ingest.pem
+      FLEETWIRE_MQTT_KEY_FILE: /run/secrets/ingest.key
       FLEETWIRE_KEYRING_DIR: /state/keyring
-      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /secrets/keyring-root.key
+      FLEETWIRE_KEYRING_ROOT_KEY_FILE: /run/secrets/keyring-root.key
+    # The keyring directory is shared with the API on one host, so ingest
+    # needs the root key that seals it (in Kubernetes it has neither).
+    secrets: [ingest.pem, ingest.key, ca-bundle.pem, keyring-root.key]
     volumes:
-      - ./secrets:/secrets:ro
       - ./.state/keyring:/state/keyring:ro
     ports: ["127.0.0.1:9111:9090"]
     depends_on:
@@ -286,6 +290,25 @@ services:
     volumes: [./jaeger.yaml:/etc/jaeger/config.yaml:ro]
     ports: ["127.0.0.1:16686:16686"]
 
+# The files scripts/dev-ca writes, handed to each service as Compose secrets:
+# read-only bind mounts at /run/secrets/<name> that keep the files' 0400
+# mode. Each service lists only what it reads; the root and service CA keys
+# are not mounted anywhere.
+secrets:
+  ca-bundle.pem: {file: ./secrets/ca-bundle.pem}
+  device-trust.pem: {file: ./secrets/device-trust.pem}
+  service-trust.pem: {file: ./secrets/service-trust.pem}
+  device-ca.pem: {file: ./secrets/device-ca.pem}
+  device-ca.key: {file: ./secrets/device-ca.key}
+  api.pem: {file: ./secrets/api.pem}
+  api.key: {file: ./secrets/api.key}
+  mosquitto.pem: {file: ./secrets/mosquitto.pem}
+  mosquitto.key: {file: ./secrets/mosquitto.key}
+  bridge.pem: {file: ./secrets/bridge.pem}
+  bridge.key: {file: ./secrets/bridge.key}
+  ingest.pem: {file: ./secrets/ingest.pem}
+  ingest.key: {file: ./secrets/ingest.key}
+  keyring-root.key: {file: ./secrets/keyring-root.key}
 networks:
   fleetwire:
     # A fixed subnet so the load generator on the host can serve metrics on
