@@ -54,17 +54,25 @@ type Config struct {
 	ReadyAfter time.Duration
 }
 
+// processor is what handle needs from *Processor; tests replace it.
+type processor interface {
+	Process(ctx context.Context, device uuid.UUID, payload []byte, receivedAt time.Time) (Outcome, error)
+}
+
 // Service consumes Kafka and stores batches.
 type Service struct {
 	cfg    Config
 	log    *slog.Logger
-	proc   *Processor
+	proc   processor
 	keys   *tenantkey.Manager
 	acks   *AckPublisher
 	kafka  *kgo.Client
 	m      *Metrics
 	lag    *prometheus.GaugeVec
 	tracer trace.Tracer
+	// produceDLQ writes one record to the dead-letter topic and waits for
+	// Kafka to confirm it.
+	produceDLQ func(context.Context, *kgo.Record) error
 	// failingSince is the Unix nano time of the first database error in the
 	// current run of failures, or 0.
 	failingSince atomic.Int64
@@ -113,6 +121,7 @@ func New(cfg Config, db *store.DB, keys *tenantkey.Manager, log *slog.Logger, re
 		return nil, fmt.Errorf("kafka client: %w", err)
 	}
 	s.kafka = cl
+	s.produceDLQ = func(ctx context.Context, r *kgo.Record) error { return cl.ProduceSync(ctx, r).FirstErr() }
 	return s, nil
 }
 
@@ -273,11 +282,13 @@ func (s *Service) handle(ctx context.Context, r *kgo.Record) error {
 		out, err := s.proc.Process(pctx, device, r.Value, received)
 		if err == nil {
 			s.failingSince.Store(0)
-			s.m.Batches.WithLabelValues(string(out.Result)).Inc()
 			span.SetAttributes(attribute.String("fleetwire.result", string(out.Result)), attribute.Int("fleetwire.stored", out.Stored))
 			if out.Result == ResultDLQ {
+				// deadLetter counts the batch, as for every other way into
+				// the DLQ.
 				return s.deadLetter(ctx, r, out.Reason, out.Detail)
 			}
+			s.m.Batches.WithLabelValues(string(out.Result)).Inc()
 			if out.Ack {
 				s.acks.Offer(trace.SpanContextFromContext(pctx), device, out.AckThrough)
 			}
@@ -325,7 +336,7 @@ func (s *Service) deadLetter(ctx context.Context, r *kgo.Record, reason, detail 
 		kgo.RecordHeader{Key: kafkahdr.DLQDetail, Value: []byte(detail)})}
 	bo := backoff.Backoff{Base: 200 * time.Millisecond, Max: 10 * time.Second}
 	return backoff.Retry(ctx, bo, backoff.RetryOptions{}, func(ctx context.Context) error {
-		return s.kafka.ProduceSync(ctx, rec).FirstErr()
+		return s.produceDLQ(ctx, rec)
 	})
 }
 
