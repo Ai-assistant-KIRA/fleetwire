@@ -208,7 +208,7 @@ func (s *Server) listGaps(w http.ResponseWriter, r *http.Request, p *principal) 
 			return err
 		}
 		var err error
-		gaps, err = tx.ListGaps(ctx, device, cur.AfterFrom, limit)
+		gaps, err = tx.ListGaps(ctx, device, cur.AfterFrom, limit+1)
 		return err
 	})
 	if errors.Is(err, store.ErrNotFound) {
@@ -217,11 +217,12 @@ func (s *Server) listGaps(w http.ResponseWriter, r *http.Request, p *principal) 
 	if err != nil {
 		return s.internal(r, err)
 	}
+	gaps, more := trimPage(gaps, limit)
 	out := page[gapJSON]{Items: make([]gapJSON, 0, len(gaps))}
 	for _, g := range gaps {
 		out.Items = append(out.Items, gapJSON{FromSeq: g.FromSeq, ToSeq: g.ToSeq, Reason: g.Reason, ReportedAt: g.ReportedAt})
 	}
-	if len(gaps) == limit {
+	if more {
 		c, err := s.cur.encode(scope, cursor{AfterFrom: gaps[len(gaps)-1].FromSeq})
 		if err != nil {
 			return s.internal(r, err)

@@ -62,7 +62,6 @@ func (r *recorder) WriteHeader(code int) {
 		if code == http.StatusMethodNotAllowed {
 			detail, reason = "method not allowed; see the Allow header", "method_not_allowed"
 		}
-		r.ResponseWriter.Header().Del("X-Content-Type-Options")
 		writeBody(r.ResponseWriter, code, "application/problem+json", problem{Type: "about:blank",
 			Title: http.StatusText(code), Status: code, Detail: detail,
 			Instance: "urn:fleetwire:request:" + requestID(r.req.Context()), Code: reason})
@@ -122,7 +121,12 @@ func wrap(listener string, next http.Handler, log *slog.Logger, m *httpMetrics) 
 		info := &reqInfo{}
 		ctx := context.WithValue(context.WithValue(r.Context(), keyRequestID, id), keyReqInfo, info)
 		r = r.WithContext(ctx)
-		w.Header().Set("X-Request-ID", id)
+		h := w.Header()
+		h.Set("X-Request-ID", id)
+		// Responses carry tenant data and tokens: no MIME sniffing, and no
+		// copies in caches. Handlers may relax Cache-Control (the CRL does).
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Cache-Control", "no-store")
 		rec := &recorder{ResponseWriter: w, req: r}
 
 		defer func() {

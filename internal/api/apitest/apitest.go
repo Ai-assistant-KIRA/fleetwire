@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,6 +52,7 @@ type Harness struct {
 	Roots         *x509.CertPool
 	OperatorToken string
 	Registry      *prometheus.Registry
+	logs          syncBuffer
 	// Validate, when set, checks every response the helpers receive (the
 	// OpenAPI contract tests plug in here).
 	Validate func(t *testing.T, req *http.Request, resp *http.Response, body []byte)
@@ -83,10 +85,11 @@ func New(t *testing.T, opts ...Option) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	var logOut io.Writer = &h.logs
 	if os.Getenv("FLEETWIRE_TEST_LOG") != "" {
-		log = slog.New(slog.NewTextHandler(os.Stderr, nil))
+		logOut = io.MultiWriter(&h.logs, os.Stderr)
 	}
+	log := slog.New(slog.NewTextHandler(logOut, nil))
 	h.Keys = tenantkey.New(h.DB, h.Keyring, log)
 	h.CRL = crl.NewPublisher(h.DB, ca, filepath.Join(t.TempDir(), "crl.pem"), log)
 	h.Registry = prometheus.NewRegistry()
@@ -146,6 +149,26 @@ func New(t *testing.T, opts ...Option) *Harness {
 	}
 	h.OperatorToken = secret.Reveal()
 	return h
+}
+
+// Logs returns everything the API and the worker have logged so far.
+func (h *Harness) Logs() string { return h.logs.String() }
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // Client returns an HTTP client that trusts the dev root and, if cert is

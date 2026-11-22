@@ -93,17 +93,18 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request, _ *principa
 	var list []store.Tenant
 	err := s.db.InTx(r.Context(), func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		list, err = tx.ListTenants(ctx, cur.After, limit)
+		list, err = tx.ListTenants(ctx, cur.After, limit+1)
 		return err
 	})
 	if err != nil {
 		return s.internal(r, err)
 	}
+	list, more := trimPage(list, limit)
 	out := page[tenantJSON]{Items: make([]tenantJSON, 0, len(list))}
 	for _, t := range list {
 		out.Items = append(out.Items, toTenant(t))
 	}
-	if len(list) == limit {
+	if more {
 		c, err := s.cur.encode("admin.tenants", struct {
 			After uuid.UUID `json:"a"`
 		}{list[len(list)-1].ID})
@@ -401,7 +402,7 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request, scope string,
 	var entries []store.AuditEntry
 	run := func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		entries, err = list(ctx, tx, cur.Before, limit)
+		entries, err = list(ctx, tx, cur.Before, limit+1)
 		return err
 	}
 	var err error
@@ -413,11 +414,12 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request, scope string,
 	if err != nil {
 		return s.internal(r, err)
 	}
+	entries, more := trimPage(entries, limit)
 	out := page[auditJSON]{Items: make([]auditJSON, 0, len(entries))}
 	for _, a := range entries {
 		out.Items = append(out.Items, toAudit(a))
 	}
-	if len(entries) == limit {
+	if more {
 		c, err := s.cur.encode(scope, cursor{Before: entries[len(entries)-1].ID})
 		if err != nil {
 			return s.internal(r, err)

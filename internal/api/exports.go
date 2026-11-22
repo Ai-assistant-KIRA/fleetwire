@@ -144,6 +144,10 @@ func (s *Server) downloadExport(w http.ResponseWriter, r *http.Request, p *princ
 	h.Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	h.Set("Content-Digest", "sha-256=:"+base64.StdEncoding.EncodeToString(exp.SHA256)+":")
 	w.WriteHeader(http.StatusOK)
+	// GET routes also answer HEAD, which sends no body: skip reading the file.
+	if r.Method == http.MethodHead {
+		return nil
+	}
 	if _, err := io.Copy(w, f); err != nil {
 		s.log.Warn("export download interrupted", "export_id", exp.ID, "err", err)
 	}

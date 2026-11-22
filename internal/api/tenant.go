@@ -85,17 +85,18 @@ func (s *Server) listTokens(w http.ResponseWriter, r *http.Request, p *principal
 	var list []store.APIToken
 	err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		list, err = tx.ListAPITokens(ctx, cur.After, limit)
+		list, err = tx.ListAPITokens(ctx, cur.After, limit+1)
 		return err
 	})
 	if err != nil {
 		return s.internal(r, err)
 	}
+	list, more := trimPage(list, limit)
 	out := page[tokenJSON]{Items: make([]tokenJSON, 0, len(list))}
 	for _, t := range list {
 		out.Items = append(out.Items, toToken(t))
 	}
-	if len(list) == limit {
+	if more {
 		c, err := s.cur.encode(scope, cursor{After: list[len(list)-1].ID})
 		if err != nil {
 			return s.internal(r, err)
@@ -180,17 +181,18 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request, p *principa
 	var list []store.Device
 	err := s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
 		var err error
-		list, err = tx.ListDevices(ctx, status, cur.After, limit)
+		list, err = tx.ListDevices(ctx, status, cur.After, limit+1)
 		return err
 	})
 	if err != nil {
 		return s.internal(r, err)
 	}
+	list, more := trimPage(list, limit)
 	out := page[deviceJSON]{Items: make([]deviceJSON, 0, len(list))}
 	for _, d := range list {
 		out.Items = append(out.Items, toDevice(d))
 	}
-	if len(list) == limit {
+	if more {
 		c, err := s.cur.encode(scope, cursor{After: list[len(list)-1].ID})
 		if err != nil {
 			return s.internal(r, err)

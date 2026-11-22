@@ -168,6 +168,16 @@ type acceptedJSON struct {
 	StatusURL string    `json:"status_url,omitempty"`
 }
 
+// trimPage takes a list fetched with limit+1 rows. The extra row only
+// tells whether another page exists, so the last page never carries a
+// cursor to an empty one.
+func trimPage[T any](list []T, limit int) ([]T, bool) {
+	if len(list) > limit {
+		return list[:limit], true
+	}
+	return list, false
+}
+
 // limitParam reads ?limit= with a default and a maximum.
 func limitParam(r *http.Request, def, maxN int) (int, *apiError) {
 	s := r.URL.Query().Get("limit")
