@@ -1,9 +1,9 @@
 # Verify a release
 
 The release workflow signs the checksum file and every container image with
-[cosign](https://docs.sigstore.dev/) keyless signing. The archives are
-covered by the signed checksum file. A software bill of materials (SPDX,
-from Syft) is attached for every archive.
+[cosign](https://docs.sigstore.dev/) keyless signing. The archives and the
+agent snaps are covered by the signed checksum file. A software bill of
+materials (SPDX, from Syft) is attached for every archive and snap.
 
 You need cosign 3 or later.
 
@@ -22,7 +22,20 @@ $ curl -fLO "$BASE/fleetwire_${VERSION#v}_linux_amd64.tar.gz"
 $ sha256sum --ignore-missing -c checksums.txt
 ```
 
-Check the archives only after the signature check succeeds.
+Check the archives only after the signature check succeeds. In releases
+after v0.1.1 the checksum file also lists the agent snaps (v0.1.1
+attached its snaps by hand, without checksums), so they are checked the
+same way:
+
+```console
+$ curl -fLO "$BASE/fleetwire-agent_${VERSION}_amd64.snap"
+$ sha256sum --ignore-missing -c checksums.txt
+$ sudo snap install --dangerous "./fleetwire-agent_${VERSION}_amd64.snap"
+```
+
+`--dangerous` is still needed: the snap is not in the Snap Store, so
+snapd has no store signature for it; the checksum file's signature takes
+that role.
 
 ## Container images
 

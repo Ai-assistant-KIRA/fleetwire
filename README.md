@@ -128,9 +128,9 @@ $ sudo snap set fleetwire-agent enroll.url=https://api.example.com:8444 enroll.t
 On Kubernetes, the Juju charms deploy the backend with Charmed PostgreSQL
 and Charmed Kafka: [Deploy with Juju](docs/how-to/deploy-with-juju.md).
 
-Tagged releases attach Linux binaries, `fwctl` for Linux and macOS, SPDX
-SBOMs and a signed checksum file, and push the API, bridge and ingest
-images to GHCR. [Verify a release](docs/how-to/verify-a-release.md) shows
+Tagged releases attach Linux binaries, `fwctl` for Linux and macOS, the
+amd64 and arm64 agent snaps, SPDX SBOMs and a signed checksum file, and
+push the API, bridge and ingest images to GHCR. [Verify a release](docs/how-to/verify-a-release.md) shows
 how to check the signatures.
 
 ## What is in the repository
