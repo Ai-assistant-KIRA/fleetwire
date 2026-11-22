@@ -27,8 +27,11 @@ apps:
     restart-condition: always
     restart-delay: 5s
     # network: broker and enrollment API. network-bind: /metrics and
-    # /status on 127.0.0.1:9465. system-observe: /proc/stat, meminfo,
-    # loadavg, uptime. hardware-observe: /sys/class/thermal.
+    # /status on 127.0.0.1:9465. hardware-observe: /sys/class/thermal.
+    # system-observe is not auto-connected, and the built-in readings do not
+    # need it: snapd's default AppArmor profile already allows /proc/stat,
+    # meminfo, loadavg and uptime (checked with the plug disconnected on
+    # snapd 2.78, which still denied /proc/partitions).
     plugs: [network, network-bind, system-observe, hardware-observe]
   fleetwire-agent:
     # `fleetwire-agent status` asks the daemon over 127.0.0.1.
