@@ -14,8 +14,5 @@ exclude_patterns = ["_build", "results/raw", "requirements.txt"]
 html_theme = "furo"
 html_title = "fleetwire"
 
-# Links to source files and the OpenAPI document are relative to the
-# repository, which the docs do not contain; check them in CI with the
-# repository checked out instead.
+# The guides' example and local addresses are not reachable from CI.
 linkcheck_ignore = [r"http://localhost.*", r"https://localhost.*", r"https://api\.example.*"]
-suppress_warnings = ["myst.xref_missing"]
