@@ -78,6 +78,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer rt.Shutdown(ctx)
 	tlsCfg, err := svc.BrokerTLS(cfg.MQTTURL, cfg.MQTTCertFile, cfg.MQTTKeyFile, cfg.MQTTCAFile)
 	if err != nil {
 		return err
@@ -93,5 +94,6 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer b.Close()
 	return rt.Serve(ctx, cfg.AdminListen, map[string]telemetry.Probe{"bridge": b.Ready}, b.Run)
 }

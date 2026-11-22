@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,6 +41,7 @@ type Runtime struct {
 	Log      *slog.Logger
 	Registry *prometheus.Registry
 	shutdown func(context.Context) error
+	once     sync.Once
 }
 
 // Start creates the logger, registry and tracer for service.
@@ -56,6 +58,19 @@ func Start(ctx context.Context, service string, c Common, logOut io.Writer) (*Ru
 	return &Runtime{Log: log, Registry: telemetry.NewRegistry(service), shutdown: shutdown}, nil
 }
 
+// Shutdown flushes and stops the trace exporter; later calls do nothing.
+// Serve calls it on the way out. Defer it right after Start too, so that a
+// startup step failing before Serve still sends the spans it recorded.
+func (r *Runtime) Shutdown(ctx context.Context) {
+	r.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := r.shutdown(ctx); err != nil {
+			r.Log.Warn("trace exporter shutdown", "err", err)
+		}
+	})
+}
+
 // Serve runs main and the admin server until a signal arrives or either
 // fails, then shuts both down.
 func (r *Runtime) Serve(ctx context.Context, adminAddr string, probes map[string]telemetry.Probe, main func(ctx context.Context) error) error {
@@ -63,6 +78,7 @@ func (r *Runtime) Serve(ctx context.Context, adminAddr string, probes map[string
 	defer stop()
 	admin, err := telemetry.NewAdminServer(ctx, adminAddr, r.Registry, probes)
 	if err != nil {
+		r.Shutdown(ctx)
 		return err
 	}
 	g, gctx := errgroup.WithContext(ctx)
@@ -81,11 +97,7 @@ func (r *Runtime) Serve(ctx context.Context, adminAddr string, probes map[string
 		return err
 	})
 	err = g.Wait()
-	tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	if serr := r.shutdown(tctx); serr != nil {
-		r.Log.Warn("trace exporter shutdown", "err", serr)
-	}
+	r.Shutdown(ctx)
 	r.Log.Info("stopped", "err", err)
 	if errors.Is(err, context.Canceled) {
 		return nil

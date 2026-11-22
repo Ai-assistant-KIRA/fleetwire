@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -93,6 +94,7 @@ type Bridge struct {
 	retrying atomic.Int64
 	lastOK   atomic.Int64
 	started  time.Time
+	closed   sync.Once
 }
 
 // New creates the Kafka producer. Nothing connects to MQTT until Run.
@@ -316,8 +318,19 @@ func (b *Bridge) Run(ctx context.Context) error {
 	defer dcancel()
 	_ = cm.Disconnect(dctx)
 	cancel()
-	b.kafka.Close()
+	b.Close()
 	return nil
+}
+
+// Close releases the Kafka client; later calls do nothing. Run closes it
+// on the way out. Defer Close after New as well, so that a startup step
+// failing before Run does not leave the client connected.
+func (b *Bridge) Close() {
+	b.closed.Do(func() {
+		if b.kafka != nil {
+			b.kafka.Close()
+		}
+	})
 }
 
 func (b *Bridge) subscribe(ctx context.Context, cm *autopaho.ConnectionManager, topic string) {

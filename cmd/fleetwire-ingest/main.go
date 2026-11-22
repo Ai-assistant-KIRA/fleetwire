@@ -100,6 +100,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer rt.Shutdown(ctx)
 	conn, err := cfg.KafkaOpts()
 	if err != nil {
 		return err
@@ -148,6 +149,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer s.Close()
 	return rt.Serve(ctx, cfg.AdminListen, map[string]telemetry.Probe{"database": db.Ping, "ingest": s.Ready}, s.Run)
 }
 

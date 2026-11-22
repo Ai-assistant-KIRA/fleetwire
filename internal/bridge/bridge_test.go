@@ -231,3 +231,14 @@ func TestColdStartCountsFromProcessStart(t *testing.T) {
 		}
 	})
 }
+
+// Close may run twice: Run closes the client on the way out, and the
+// binary defers Close for startup steps that fail before Run.
+func TestCloseIsIdempotent(t *testing.T) {
+	b, err := New(Config{Topic: "uplink", Kafka: []kgo.Opt{kgo.SeedBrokers("127.0.0.1:1")}}, slog.New(slog.DiscardHandler), prometheus.NewRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	b.Close()
+}

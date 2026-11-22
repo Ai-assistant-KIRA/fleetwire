@@ -80,6 +80,7 @@ type Service struct {
 	// failingSince is the Unix nano time of the first database or keyring
 	// outage error in the current run of failures, or 0.
 	failingSince atomic.Int64
+	closed       sync.Once
 }
 
 // New connects to Kafka (lazily) and prepares the ack publisher.
@@ -150,7 +151,7 @@ func (s *Service) Run(ctx context.Context) error {
 	wg.Go(func() { s.flushSeals(actx) })
 	wg.Go(func() { s.reportLag(ctx) })
 	defer func() {
-		s.kafka.Close()
+		s.Close()
 		// Acks for everything committed so far get a moment to go out.
 		s.acks.Drain(5 * time.Second)
 		stopAcks()
@@ -187,6 +188,18 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 		s.kafka.AllowRebalance()
 	}
+}
+
+// Close releases the Kafka client, leaving the consumer group; later calls
+// do nothing. Run closes it on the way out. Defer Close after New as well:
+// the client joins the group in the background once it exists, and a
+// startup step failing before Run must not leave it holding partitions.
+func (s *Service) Close() {
+	s.closed.Do(func() {
+		if s.kafka != nil {
+			s.kafka.Close()
+		}
+	})
 }
 
 // reportLag sets the consumer lag of the partitions this instance owns,
