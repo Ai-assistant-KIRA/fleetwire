@@ -14,7 +14,9 @@ stored exactly once, tenants kept apart), so changes come with evidence.
 ## Development setup
 
 You need Go (version in `go.mod`), Docker with Compose v2, `make`, and for
-some targets `buf`, `golangci-lint`, `promtool` and Python 3.12.
+some targets `buf`, `golangci-lint`, `promtool`, Python 3.12 (charms) and
+Python 3.13 or later (`make docs`, as Sphinx 9 needs it; pick the
+interpreter with `make docs PYTHON=python3.13`).
 
 ```console
 $ make lint test          # format, vet, lint, unit and integration tests

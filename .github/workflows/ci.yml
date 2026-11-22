@@ -124,9 +124,11 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Sphinx 9 needs Python 3.13 or later. (The charm jobs stay on 3.12,
+      # the Python of the charms' Ubuntu 24.04 base.)
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: "3.13"
       - run: make docs
       - name: Link check
         run: .cache/docs-venv/bin/sphinx-build -b linkcheck docs docs/_build/linkcheck

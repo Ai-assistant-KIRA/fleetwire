@@ -13,6 +13,7 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/buildinfo.Date=$(DATE)
 BINARIES := $(notdir $(wildcard cmd/*))
 FUZZTIME ?= 30s
+PYTHON  ?= python3
 
 .PHONY: help
 help: ## Show this help
@@ -88,8 +89,8 @@ docs-reference: build ## Regenerate docs/reference/configuration.md from the con
 	} > docs/reference/configuration.md
 
 .PHONY: docs
-docs: ## Build the Sphinx documentation into docs/_build/html
-	python3 -m venv .cache/docs-venv
+docs: ## Build the Sphinx documentation into docs/_build/html (Python 3.13+; PYTHON=python3.13)
+	$(PYTHON) -m venv .cache/docs-venv
 	.cache/docs-venv/bin/pip install -q -r docs/requirements.txt
 	.cache/docs-venv/bin/sphinx-build -W --keep-going -b html docs docs/_build/html
 
