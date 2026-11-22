@@ -132,6 +132,20 @@ func TestFwctlAgainstRealAPI(t *testing.T) {
 	if len(tokens) != 1 {
 		t.Fatalf("token list -limit 1 = %+v", tokens)
 	}
+	var shownTok struct{ ID, Name string }
+	mustJSON(tok.Token, &shownTok, "token", "show", tokens[0].ID)
+	if shownTok.ID != tokens[0].ID || shownTok.Name == "" {
+		t.Fatalf("token show = %+v", shownTok)
+	}
+	var del struct {
+		JobID string `json:"job_id"`
+	}
+	mustJSON(tok.Token, &del, "device", "delete", dev.ID.String(), "-yes")
+	var job struct{ ID, Kind, Status string }
+	mustJSON(tok.Token, &job, "job", "show", del.JobID)
+	if job.ID != del.JobID || job.Kind != "device_purge" {
+		t.Fatalf("job show = %+v", job)
+	}
 
 	if _, err := fw(h.OperatorToken, "tenant", "destroy", tenant.ID, "-yes"); err != nil {
 		t.Fatal(err)
@@ -221,6 +235,16 @@ func TestPlainHTTPOnlyToLoopback(t *testing.T) {
 	}
 	if _, err := fwctlEnv(t, "http://api.example.com", "device", "list"); err == nil || !strings.Contains(err.Error(), "clear text") {
 		t.Fatalf("plain http to a remote host: %v", err)
+	}
+}
+
+func TestVersionNeedsNoAPI(t *testing.T) {
+	var out, errOut bytes.Buffer
+	if err := run(t.Context(), []string{"version"}, func(string) string { return "" }, &out, &errOut); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(out.String(), "dev (commit ") {
+		t.Fatalf("version: %q", out.String())
 	}
 }
 

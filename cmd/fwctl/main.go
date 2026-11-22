@@ -34,11 +34,14 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo"
 )
 
 const usage = `fwctl: command-line client for the fleetwire API
 
 Usage: fwctl [-url URL] [-token TOKEN] [-ca-file FILE] [-o table|json] <group> <command> [flags] [args]
+       fwctl version
 
 Operator token (fwo_...):
   tenant create -name NAME [-retention-days N]
@@ -54,6 +57,7 @@ Tenant token (fwt_...):
   tenant set-retention DAYS
   token create -name NAME -scopes a,b
   token list [-limit N]
+  token show ID
   token revoke ID
   enroll-token create [-count N] [-ttl 15m]
   device list [-status active|revoked|deleted] [-limit N]
@@ -66,6 +70,7 @@ Tenant token (fwt_...):
   export status ID
   export download ID -out FILE
   audit list [-limit N]
+  job show ID                                         the job_id that device delete returns
 
 Each command takes only the flags listed for it. Flags may follow its
 arguments, and -- ends them. The URL must be https, or http to a loopback
@@ -117,6 +122,10 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return err
 	}
 	rest := gfs.Args()
+	if len(rest) == 1 && rest[0] == "version" {
+		_, err := fmt.Fprintln(stdout, buildinfo.Get())
+		return err
+	}
 	if len(rest) < 2 {
 		gfs.Usage()
 		return errors.New("missing group and command")
@@ -331,6 +340,13 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 		"token list": {[]string{"limit"}, func(ctx context.Context, _ []string) error {
 			return c.list(ctx, "/v1/tokens?limit=1000", *limit, []string{"id", "name", "scopes", "created_at", "last_used_at", "revoked_at"})
 		}},
+		"token show": {nil, func(ctx context.Context, args []string) error {
+			if err := need(args, "a token ID"); err != nil {
+				return err
+			}
+			return c.show(ctx, "GET", "/v1/tokens/"+url.PathEscape(args[0]), nil,
+				[]string{"id", "name", "scopes", "created_at", "last_used_at", "revoked_at"})
+		}},
 		"token revoke": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "a token ID"); err != nil {
 				return err
@@ -450,6 +466,13 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				path = "/v1/admin/audit?limit=1000"
 			}
 			return c.list(ctx, path, *limit, []string{"id", "at", "actor_type", "actor_id", "action", "target_type", "target_id", "result"})
+		}},
+		"job show": {nil, func(ctx context.Context, args []string) error {
+			if err := need(args, "a job ID"); err != nil {
+				return err
+			}
+			return c.show(ctx, "GET", "/v1/jobs/"+url.PathEscape(args[0]), nil,
+				[]string{"id", "kind", "status", "attempts", "last_error", "created_at", "finished_at"})
 		}},
 	}
 }
