@@ -315,18 +315,22 @@ func (w *Worker) destroyTenant(ctx context.Context, tenant uuid.UUID) (any, erro
 		if t, err = tx.LockTenant(ctx); err != nil {
 			return err
 		}
+		if t.Status == store.TenantDestroyed {
+			return nil
+		}
 		if t.Status == store.TenantActive {
 			if err := tx.SetTenantStatus(ctx, store.TenantDestroying); err != nil {
 				return err
 			}
-			if _, err := tx.RevokeAllDevices(ctx); err != nil {
-				return err
-			}
 		}
-		if t.Status != store.TenantDestroyed {
-			return tx.DestroyTenantKeys(ctx)
+		// Revoked on every attempt, not only when this job starts the
+		// destroy: a device enrolled or renewed past an earlier first step
+		// (before enrollment and renewal locked the tenant) would otherwise
+		// keep a valid certificate. It is a no-op when nothing is active.
+		if _, err := tx.RevokeAllDevices(ctx); err != nil {
+			return err
 		}
-		return nil
+		return tx.DestroyTenantKeys(ctx)
 	})
 	if err != nil {
 		return nil, err

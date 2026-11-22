@@ -177,7 +177,9 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 	var denied bool
 	var chain []byte
 	err = s.db.InTx(r.Context(), func(ctx context.Context, tx *store.Tx) error {
-		ref, err := tx.DeviceLookup(ctx, deviceID)
+		// Locked until commit: a revoke or tenant destroy racing this renewal
+		// either is seen here or revokes the new certificate after it.
+		ref, err := tx.LockDevice(ctx, deviceID)
 		if err != nil {
 			return err
 		}

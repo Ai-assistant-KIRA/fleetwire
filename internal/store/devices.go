@@ -104,6 +104,18 @@ func (t *Tx) DeviceLookup(ctx context.Context, id uuid.UUID) (DeviceRef, error) 
 	return v, nil
 }
 
+// LockDevice is DeviceLookup for certificate renewal: until the transaction
+// ends it holds the tenant row FOR SHARE and the device row FOR UPDATE, so
+// a revoke or tenant destroy either commits before it and is seen here, or
+// waits and then revokes the certificate this transaction stores.
+func (t *Tx) LockDevice(ctx context.Context, id uuid.UUID) (DeviceRef, error) {
+	v, err := one[DeviceRef](t.tx.Query(ctx, `SELECT * FROM fleetwire.lock_device($1)`, id))
+	if err != nil {
+		return DeviceRef{}, fmt.Errorf("lock device: %w", err)
+	}
+	return v, nil
+}
+
 // SetDeviceCert records the device's current certificate.
 func (t *Tx) SetDeviceCert(ctx context.Context, c DeviceCert) error {
 	if _, err := t.tx.Exec(ctx, `

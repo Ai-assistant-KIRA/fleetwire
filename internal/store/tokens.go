@@ -22,6 +22,9 @@ func (t *Tx) InsertEnrollmentToken(ctx context.Context, id uuid.UUID, hash []byt
 
 // ConsumeEnrollmentToken atomically uses a token for deviceID. It works
 // without a tenant context and returns the token's tenant and the outcome.
+// It holds the tenant row FOR SHARE until the transaction ends, so the
+// tenant stays active while the caller stores the new device: a destroy
+// waits, then revokes the device with the others.
 func (t *Tx) ConsumeEnrollmentToken(ctx context.Context, hash []byte, deviceID uuid.UUID) (uuid.UUID, string, error) {
 	var tenant *uuid.UUID
 	var outcome string
