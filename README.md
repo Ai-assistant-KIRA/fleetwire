@@ -85,7 +85,8 @@ before each fault ingest stored 870 to 990 readings/s, a backlog of about
 means the runner stopped waiting.
 
 **Power loss**: 10 hard resets (QMP `system_reset`) of a VM running the
-agent snap, at random moments, with a reading every 200 ms and
+agent snap, at random moments, with a collection every 200 ms (11
+readings from the built-in collectors, about 55 readings/s) and
 `wal.sync=interval`: 9,089 readings, all acknowledged, 0 missing,
 0 duplicates. The VM ran Ubuntu Server 24.04, not Ubuntu Core (see
 Limitations).

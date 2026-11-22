@@ -50,7 +50,13 @@ $ UC_USER=<user> RESETS=10 deploy/ubuntu-core/uc-poweroff-test.sh
 
 The script sets `collect.interval=200ms` and `wal.sync=interval`, then ten
 times waits 5 to 30 s and sends QMP `system_reset`: a hard reset with no
-clean shutdown. After the last boot it waits until the agent's last seq is
+clean shutdown. Each collection writes 11 readings from the built-in
+collectors, plus one per thermal zone, so a VM without thermal zones
+writes about 55 readings/s while the agent runs. The recorded run's 9,089
+readings come to about 165 s of collecting; the rest of its 17 minutes
+went to rebooting under software emulation and to the final drain.
+
+After the last boot the script waits until the agent's last seq is
 acked, reads `fleetwire-agent status -json` over SSH, and runs the checker
 for that device. The pass rule is the same as the chaos suite: 0 missing,
 0 duplicates. The table goes to `docs/results/<time>-<commit>-poweroff.md`.
