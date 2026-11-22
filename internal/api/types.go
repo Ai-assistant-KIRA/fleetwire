@@ -148,7 +148,8 @@ func toJob(j store.Job) jobJSON {
 }
 
 type acceptedJSON struct {
-	// JobID is uuid.Nil when an identical job was already queued.
+	// JobID is the job doing the work: the one just queued, or an identical
+	// job that was already queued, running or done.
 	JobID     uuid.UUID `json:"job_id"`
 	StatusURL string    `json:"status_url,omitempty"`
 }

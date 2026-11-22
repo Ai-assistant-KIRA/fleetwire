@@ -153,14 +153,10 @@ func (s *Server) destroyTenant(w http.ResponseWriter, r *http.Request, p *princi
 				return err
 			}
 		}
-		created, err := tx.EnqueueJob(ctx, jobID, store.JobTenantDestroy, map[string]any{"tenant_id": id},
-			"tenant_destroy:"+id.String(), s.now())
-		if err != nil {
+		// When a destroy job already exists, this is its ID.
+		if jobID, err = tx.EnqueueJob(ctx, jobID, store.JobTenantDestroy, map[string]any{"tenant_id": id},
+			"tenant_destroy:"+id.String(), s.now()); err != nil {
 			return err
-		}
-		if !created {
-			// A destroy job already exists; report that one.
-			jobID = uuid.Nil
 		}
 		return tx.InsertAudit(ctx, audit(p, "tenant.destroy", "tenant", id.String(), nil))
 	})

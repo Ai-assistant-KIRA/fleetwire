@@ -520,7 +520,7 @@ components:
             additionalProperties: false
             required: [job_id]
             properties:
-              job_id: {type: string, format: uuid, description: The nil UUID when an identical job was already queued.}
+              job_id: {type: string, format: uuid, description: "The job doing the work: the one just queued, or an identical job that was already queued, running or done."}
               status_url: {type: string}
     AuditPage:
       description: Audit entries, newest first.

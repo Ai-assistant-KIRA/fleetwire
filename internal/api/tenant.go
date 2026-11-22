@@ -275,13 +275,10 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, p *princip
 			apiErr = errNotFound("device")
 			return nil
 		}
-		created, err := tx.EnqueueJob(ctx, jobID, store.JobDevicePurge, map[string]any{"device_id": id},
-			"device_purge:"+id.String(), s.now())
-		if err != nil {
+		// When a purge job already exists, this is its ID.
+		if jobID, err = tx.EnqueueJob(ctx, jobID, store.JobDevicePurge, map[string]any{"device_id": id},
+			"device_purge:"+id.String(), s.now()); err != nil {
 			return err
-		}
-		if !created {
-			jobID = uuid.Nil
 		}
 		return tx.InsertAudit(ctx, audit(p, "device.delete", "device", id.String(), nil))
 	})
@@ -295,11 +292,7 @@ func (s *Server) deleteDevice(w http.ResponseWriter, r *http.Request, p *princip
 		return apiErr
 	}
 	s.crl.Trigger()
-	resp := acceptedJSON{JobID: jobID}
-	if jobID != uuid.Nil {
-		resp.StatusURL = "/v1/jobs/" + jobID.String()
-	}
-	writeJSON(w, http.StatusAccepted, resp)
+	writeJSON(w, http.StatusAccepted, acceptedJSON{JobID: jobID, StatusURL: "/v1/jobs/" + jobID.String()})
 	return nil
 }
 

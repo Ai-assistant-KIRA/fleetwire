@@ -597,26 +597,54 @@ func TestClaimJobsNeverHandsOutTwice(t *testing.T) {
 	}
 }
 
+// setJobStatus moves a job to status as the owner, the way a worker would
+// after the job's last attempt.
+func setJobStatus(t *testing.T, id uuid.UUID, status string) {
+	t.Helper()
+	conn, err := pgx.Connect(t.Context(), storetest.Start(t).OwnerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(t.Context()))
+	if _, err := conn.Exec(t.Context(), `UPDATE fleetwire.jobs SET status = $2, finished_at = now() WHERE id = $1`, id, status); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDedupeKey: a queued, running or succeeded job holds its key and
+// EnqueueJob reports it; a job that failed for good does not.
 func TestDedupeKey(t *testing.T) {
 	db := storetest.AppDB(t)
 	f := newFixture(t, db)
-	err := db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
-		key := "retention:" + f.tenant.String() + ":2026-11-09T03"
-		first, err := tx.EnqueueJob(ctx, uuid.New(), store.JobRetention, nil, key, time.Now())
-		if err != nil {
+	key := "retention:" + f.tenant.String() + ":2026-11-09T03"
+	enqueue := func() (asked, got uuid.UUID) {
+		t.Helper()
+		asked = uuid.New()
+		err := db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			got, err = tx.EnqueueJob(ctx, asked, store.JobRetention, nil, key, time.Now())
 			return err
-		}
-		second, err := tx.EnqueueJob(ctx, uuid.New(), store.JobRetention, nil, key, time.Now())
+		})
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		if !first || second {
-			t.Errorf("enqueue results %v %v, want true false", first, second)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+		return asked, got
+	}
+	asked, first := enqueue()
+	if first != asked {
+		t.Fatalf("first enqueue returned %s, want the new job %s", first, asked)
+	}
+	if _, got := enqueue(); got != first {
+		t.Fatalf("second enqueue returned %s, want the queued job %s", got, first)
+	}
+	setJobStatus(t, first, store.JobSucceeded)
+	if _, got := enqueue(); got != first {
+		t.Fatalf("after success enqueue returned %s, want the succeeded job %s", got, first)
+	}
+	setJobStatus(t, first, store.JobFailed)
+	asked, again := enqueue()
+	if again != asked {
+		t.Fatalf("after a failure enqueue returned %s, want a new job %s", again, asked)
 	}
 }
 

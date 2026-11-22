@@ -227,13 +227,53 @@ func (w *Worker) execute(ctx context.Context, j store.Job) {
 	}
 	w.total.WithLabelValues(j.Kind, "error").Inc()
 	retry := w.now().Add(min(time.Duration(1<<min(j.Attempts, 10))*10*time.Second, time.Hour))
-	log.Error("job failed; will retry", "err", err, "retry_at", retry)
+	msg := err.Error()
+	var failed bool
 	rerr := w.d.DB.InTenantTx(context.WithoutCancel(ctx), j.TenantID, func(ctx context.Context, tx *store.Tx) error {
-		return tx.RetryJob(ctx, j.ID, w.cfg.WorkerID, err.Error(), retry)
+		var err error
+		if failed, err = tx.RetryJob(ctx, j.ID, w.cfg.WorkerID, msg, retry); err != nil || !failed {
+			return err
+		}
+		return failJob(ctx, tx, j)
 	})
-	if rerr != nil {
-		log.Error("could not record job failure; the lease will expire", "err", rerr)
+	switch {
+	case rerr != nil:
+		log.Error("job failed; could not record the failure, the lease will expire", "err", err, "record_err", rerr)
+	case failed:
+		log.Error("job failed for good; no attempts left", "err", err)
+	default:
+		log.Error("job failed; will retry", "err", err, "retry_at", retry)
 	}
+}
+
+// exportFailed is what a tenant sees on an export whose job failed for good.
+// The cause is in the job's last error and the log.
+const exportFailed = "the export failed; create a new one"
+
+// failJob runs, in the transaction that marks j failed for good, what has
+// to fail with it: an export job's export, which would otherwise stay
+// running forever.
+func failJob(ctx context.Context, tx *store.Tx, j store.Job) error {
+	if j.Kind != store.JobExport {
+		return nil
+	}
+	// With a malformed payload there is no export to fail; the payload
+	// error is the job's last error.
+	if id, ok := exportID(j); ok {
+		return tx.FailExport(ctx, id, exportFailed)
+	}
+	return nil
+}
+
+// exportID reads the export an export job works on.
+func exportID(j store.Job) (uuid.UUID, bool) {
+	var p struct {
+		ExportID uuid.UUID `json:"export_id"`
+	}
+	if err := json.Unmarshal(j.Payload, &p); err != nil {
+		return uuid.Nil, false
+	}
+	return p.ExportID, true
 }
 
 func (w *Worker) handle(ctx context.Context, j store.Job) (any, error) {

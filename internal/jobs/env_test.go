@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/chunks"
@@ -128,15 +129,54 @@ func (e *env) inTenant(tenant uuid.UUID, fn func(ctx context.Context, tx *store.
 	}
 }
 
-// enqueue queues a job of kind for tenant and returns its ID.
+// enqueue queues a job of kind for tenant and returns the ID EnqueueJob
+// reports.
 func (e *env) enqueue(tenant uuid.UUID, kind string, payload any, dedupeKey string) uuid.UUID {
 	e.t.Helper()
-	id := uuid.Must(uuid.NewV7())
+	var id uuid.UUID
 	e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
-		_, err := tx.EnqueueJob(ctx, id, kind, payload, dedupeKey, time.Now())
+		var err error
+		id, err = tx.EnqueueJob(ctx, uuid.Must(uuid.NewV7()), kind, payload, dedupeKey, time.Now())
 		return err
 	})
 	return id
+}
+
+// asOwner runs sql as the schema owner, for test setups the runtime role
+// may not do.
+func (e *env) asOwner(sql string, args ...any) {
+	e.t.Helper()
+	conn, err := pgx.Connect(e.t.Context(), storetest.Start(e.t).OwnerURL)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(e.t.Context()))
+	if _, err := conn.Exec(e.t.Context(), sql, args...); err != nil {
+		e.t.Fatalf("%s: %v", sql, err)
+	}
+}
+
+// export creates a pending export of the whole tenant and queues its job,
+// the way the API does. It returns the export and job IDs.
+func (e *env) export(tenant uuid.UUID) (uuid.UUID, uuid.UUID) {
+	e.t.Helper()
+	id := uuid.Must(uuid.NewV7())
+	e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
+		_, err := tx.InsertExport(ctx, id, nil)
+		return err
+	})
+	return id, e.enqueue(tenant, store.JobExport, map[string]any{"export_id": id}, "export:"+id.String())
+}
+
+func (e *env) getExport(tenant, id uuid.UUID) store.Export {
+	e.t.Helper()
+	var exp store.Export
+	e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
+		var err error
+		exp, err = tx.GetExport(ctx, id)
+		return err
+	})
+	return exp
 }
 
 // runJobs runs runnable jobs until none is left.

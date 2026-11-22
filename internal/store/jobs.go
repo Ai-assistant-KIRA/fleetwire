@@ -3,34 +3,63 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 const jobCols = `id, tenant_id, kind, status, payload, result, attempts, max_attempts, last_error,
 	run_after, locked_until, locked_by, dedupe_key, created_at, finished_at`
 
-// EnqueueJob adds a job for the current tenant. With a dedupe key, a second
-// job with the same key is ignored and EnqueueJob returns false.
-func (t *Tx) EnqueueJob(ctx context.Context, id uuid.UUID, kind string, payload any, dedupeKey string, runAfter time.Time) (bool, error) {
+// dedupeHolders are the job states that hold a dedupe key (migration
+// 00006): a job that failed for good gives its key up.
+const dedupeHolders = `status IN ('queued', 'running', 'succeeded')`
+
+// EnqueueJob adds a job for the current tenant and returns the ID of the
+// job that will do the work. With a dedupe key, at most one queued, running
+// or succeeded job holds the key: when there is one, nothing is added and
+// EnqueueJob returns that job's ID instead of id.
+func (t *Tx) EnqueueJob(ctx context.Context, id uuid.UUID, kind string, payload any, dedupeKey string, runAfter time.Time) (uuid.UUID, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return false, fmt.Errorf("encode job payload: %w", err)
+		return uuid.Nil, fmt.Errorf("encode job payload: %w", err)
 	}
-	var key *string
-	if dedupeKey != "" {
-		key = &dedupeKey
+	if dedupeKey == "" {
+		if _, err := t.tx.Exec(ctx, `
+			INSERT INTO fleetwire.jobs (id, tenant_id, kind, payload, run_after) VALUES ($1, $2, $3, $4, $5)`,
+			id, t.tenant, kind, body, runAfter); err != nil {
+			return uuid.Nil, fmt.Errorf("enqueue job: %w", err)
+		}
+		return id, nil
 	}
-	tag, err := t.tx.Exec(ctx, `
-		INSERT INTO fleetwire.jobs (id, tenant_id, kind, payload, dedupe_key, run_after)
-		VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (dedupe_key) DO NOTHING`,
-		id, t.tenant, kind, body, key, runAfter)
-	if err != nil {
-		return false, fmt.Errorf("enqueue job: %w", err)
+	// The holder can fail for good between the INSERT and the SELECT, which
+	// then finds nothing; the next INSERT goes through.
+	for range 3 {
+		var got uuid.UUID
+		err := t.tx.QueryRow(ctx, `
+			INSERT INTO fleetwire.jobs (id, tenant_id, kind, payload, dedupe_key, run_after)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (dedupe_key) WHERE `+dedupeHolders+` DO NOTHING
+			RETURNING id`, id, t.tenant, kind, body, dedupeKey, runAfter).Scan(&got)
+		if err == nil {
+			return got, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, fmt.Errorf("enqueue job: %w", err)
+		}
+		err = t.tx.QueryRow(ctx, `SELECT id FROM fleetwire.jobs WHERE dedupe_key = $1 AND `+dedupeHolders,
+			dedupeKey).Scan(&got)
+		if err == nil {
+			return got, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, fmt.Errorf("enqueue job: find the job holding %q: %w", dedupeKey, err)
+		}
 	}
-	return tag.RowsAffected() == 1, nil
+	return uuid.Nil, fmt.Errorf("enqueue job: the job holding %q kept changing", dedupeKey)
 }
 
 // ClaimJobs leases up to n runnable jobs of the given kinds for worker.
@@ -87,18 +116,24 @@ func (t *Tx) FinishJob(ctx context.Context, id uuid.UUID, worker string, result 
 }
 
 // RetryJob releases a failed attempt. The job runs again after retryAt, or
-// is marked failed for good when it has used all its attempts.
-func (t *Tx) RetryJob(ctx context.Context, id uuid.UUID, worker, errMsg string, retryAt time.Time) error {
-	_, err := t.tx.Exec(ctx, `
+// is marked failed for good when it has used all its attempts; failed
+// reports that. Nothing changes when worker no longer holds the job.
+func (t *Tx) RetryJob(ctx context.Context, id uuid.UUID, worker, errMsg string, retryAt time.Time) (failed bool, err error) {
+	var status string
+	err = t.tx.QueryRow(ctx, `
 		UPDATE fleetwire.jobs
 		SET last_error = $3, locked_until = NULL, locked_by = NULL, run_after = $4,
 		    status = CASE WHEN attempts >= max_attempts THEN 'failed' ELSE 'queued' END,
 		    finished_at = CASE WHEN attempts >= max_attempts THEN now() ELSE NULL END
-		WHERE id = $1 AND locked_by = $2`, id, worker, errMsg, retryAt)
-	if err != nil {
-		return fmt.Errorf("retry job: %w", err)
+		WHERE id = $1 AND locked_by = $2
+		RETURNING status`, id, worker, errMsg, retryAt).Scan(&status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
 	}
-	return nil
+	if err != nil {
+		return false, fmt.Errorf("retry job: %w", err)
+	}
+	return status == JobFailed, nil
 }
 
 // HasPendingJob reports whether the current tenant has an unfinished job
@@ -156,9 +191,12 @@ func (t *Tx) CompleteExport(ctx context.Context, id uuid.UUID, path string, sum 
 	return nil
 }
 
-// FailExport records why an export failed.
+// FailExport records why an export failed. msg is shown to the tenant. An
+// export that is already ready or expired keeps its state.
 func (t *Tx) FailExport(ctx context.Context, id uuid.UUID, msg string) error {
-	if _, err := t.tx.Exec(ctx, `UPDATE fleetwire.exports SET status = 'failed', error = $2 WHERE id = $1`, id, msg); err != nil {
+	if _, err := t.tx.Exec(ctx, `
+		UPDATE fleetwire.exports SET status = 'failed', error = $2
+		WHERE id = $1 AND status IN ('pending', 'running')`, id, msg); err != nil {
 		return fmt.Errorf("fail export: %w", err)
 	}
 	return nil
