@@ -35,7 +35,7 @@ resources:
   ingest-image:
     type: oci-image
     description: OCI image with fleetwire-ingest at /usr/local/bin/service.
-    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.1.0
+    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.1.1
 
 peers:
   ingest-peers:
