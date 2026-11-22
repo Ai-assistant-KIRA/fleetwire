@@ -179,7 +179,7 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 		listen = cfg.MetricsListen
 	}
 	var st map[string]any
-	if body, err := getStatus(ctx, listen); err == nil {
+	if body, err := getStatus(ctx, dialAddr(listen)); err == nil {
 		if err := json.Unmarshal(body, &st); err != nil {
 			return fmt.Errorf("decode status: %w", err)
 		}
@@ -210,6 +210,23 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// dialAddr turns a listen address into one to connect to: a daemon that
+// listens on every address (":9465", "0.0.0.0:9465", "[::]:9465") is
+// reached on loopback.
+func dialAddr(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+	switch host {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func getStatus(ctx context.Context, listen string) ([]byte, error) {
