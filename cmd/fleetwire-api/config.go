@@ -36,14 +36,14 @@ type apiConfig struct {
 	DeviceCACertFile string `env:"FLEETWIRE_DEVICE_CA_CERT_FILE" flag:"device-ca-cert" help:"Device Issuing CA certificate (signs device certificates and the CRL)."`
 	DeviceCAKeyFile  string `env:"FLEETWIRE_DEVICE_CA_KEY_FILE" flag:"device-ca-key" help:"Device Issuing CA private key."`
 	CABundleFile     string `env:"FLEETWIRE_CA_BUNDLE_FILE" flag:"ca-bundle" help:"CA bundle sent to devices to verify the broker and the API."`
-	DeviceBrokerURL  string `env:"FLEETWIRE_DEVICE_BROKER_URL" flag:"device-broker-url" help:"Broker URL sent to devices at enrollment, for example tls://broker.example:8883."`
-	DeviceAPIURL     string `env:"FLEETWIRE_DEVICE_API_URL" flag:"device-api-url" help:"Device listener URL sent to devices, used for renewal."`
+	DeviceBrokerURL  string `env:"FLEETWIRE_DEVICE_BROKER_URL" flag:"device-broker-url" help:"Broker URL sent to devices at enrollment, for example tls://broker.example:8883. Must be tls://, mqtts:// or ssl:// with a port."`
+	DeviceAPIURL     string `env:"FLEETWIRE_DEVICE_API_URL" flag:"device-api-url" help:"Device listener URL sent to devices, used for renewal, for example https://api.example:8444. Must be https://."`
 
 	KeyringDir         string `env:"FLEETWIRE_KEYRING_DIR" flag:"keyring-dir" help:"Directory of per-tenant KEK files."`
 	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600)."`
 
 	CRLFile          string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
-	CRLInterval      time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h (the design republishes it daily)."`
+	CRLInterval      time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h: the stale-CRL alert at 48h and the CRL's 7-day validity assume a daily republish."`
 	ExportDir        string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
 	MaxActiveExports int           `env:"FLEETWIRE_API_MAX_ACTIVE_EXPORTS" flag:"max-active-exports" default:"4" help:"Exports one tenant can have pending or running at once. Further POST /v1/exports requests get 409 until one finishes."`
 

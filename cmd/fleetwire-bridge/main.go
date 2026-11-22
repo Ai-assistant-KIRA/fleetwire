@@ -24,7 +24,7 @@ import (
 type bridgeConfig struct {
 	svc.Common
 	svc.Kafka
-	MQTTURL      string `env:"FLEETWIRE_MQTT_URL" flag:"mqtt-url" required:"true" help:"Broker service listener, for example tls://mosquitto:8884."`
+	MQTTURL      string `env:"FLEETWIRE_MQTT_URL" flag:"mqtt-url" required:"true" help:"Broker service listener, for example tls://mosquitto:8884. Must use a TLS scheme: tls, ssl, mqtts, mqtt+ssl or tcps."`
 	MQTTCertFile string `env:"FLEETWIRE_MQTT_CERT_FILE" flag:"mqtt-cert" required:"true" help:"Client certificate chain (CN fleetwire-bridge)."`
 	MQTTKeyFile  string `env:"FLEETWIRE_MQTT_KEY_FILE" flag:"mqtt-key" required:"true" help:"Client private key."`
 	MQTTCAFile   string `env:"FLEETWIRE_MQTT_CA_FILE" flag:"mqtt-ca" required:"true" help:"CA bundle that signed the broker certificate."`
