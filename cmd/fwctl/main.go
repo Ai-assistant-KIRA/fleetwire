@@ -64,6 +64,9 @@ Tenant token (fwt_...):
   export download ID -out FILE
   audit list [-limit N]
 
+Each command takes only the flags listed for it. Flags may follow its
+arguments, and -- ends them.
+
 Environment: FWCTL_URL, FWCTL_TOKEN, FWCTL_CA_FILE, FWCTL_OUTPUT.
 `
 
@@ -71,6 +74,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	err := run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr)
 	stop()
+	if errors.Is(err, flag.ErrHelp) {
+		return
+	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fwctl:", err)
 		os.Exit(1)
@@ -130,40 +136,85 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		out:    stdout,
 	}
 	group, cmd, cargs := rest[0], rest[1], rest[2:]
-	fs := flag.NewFlagSet("fwctl "+group+" "+cmd, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	h, ok := c.commands(fs)[group+" "+cmd]
+	all := flag.NewFlagSet("fwctl", flag.ContinueOnError)
+	h, ok := c.commands(all)[group+" "+cmd]
 	if !ok {
 		gfs.Usage()
 		return fmt.Errorf("unknown command %q", group+" "+cmd)
 	}
-	pos, err := parseInterleaved(fs, cargs)
+	pos, err := parseInterleaved(h.flagSet(all, "fwctl "+group+" "+cmd, stderr), cargs)
 	if err != nil {
 		return err
 	}
-	return h(ctx, pos)
+	return h.run(ctx, pos)
 }
 
 // parseInterleaved lets flags follow positional arguments
 // ("device delete ID -yes"); the flag package alone stops at the first one.
+// After a "--" every argument is positional, as with the flag package.
 func parseInterleaved(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
 			return nil, err
 		}
-		args = fs.Args()
-		if len(args) == 0 {
+		rest := fs.Args()
+		if endsWithTerminator(fs, args[:len(args)-len(rest)]) {
+			return append(pos, rest...), nil
+		}
+		if len(rest) == 0 {
 			return pos, nil
 		}
-		pos, args = append(pos, args[0]), args[1:]
+		pos, args = append(pos, rest[0]), rest[1:]
 	}
+}
+
+// endsWithTerminator reports whether the arguments fs.Parse consumed end
+// with a "--" that ended the flags, rather than one given as the value of
+// a flag ("-name --").
+func endsWithTerminator(fs *flag.FlagSet, consumed []string) bool {
+	for i := 0; i < len(consumed); i++ {
+		a := consumed[i]
+		if a == "--" {
+			return true
+		}
+		name := strings.TrimLeft(a, "-")
+		if strings.Contains(name, "=") {
+			continue
+		}
+		f := fs.Lookup(name)
+		if f == nil {
+			continue
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); !ok || !b.IsBoolFlag() {
+			i++ // the next argument is this flag's value
+		}
+	}
+	return false
 }
 
 func (c *cli) operator() bool { return strings.HasPrefix(c.token, "fwo_") }
 
-type command func(ctx context.Context, args []string) error
+// command is one fwctl command and the names of the flags it takes.
+type command struct {
+	flags []string
+	run   func(ctx context.Context, args []string) error
+}
 
+// flagSet returns a flag set with only the command's flags, taken from
+// all, so that a flag meant for another command is an error rather than
+// silently ignored.
+func (c command) flagSet(all *flag.FlagSet, name string, out io.Writer) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(out)
+	for _, n := range c.flags {
+		f := all.Lookup(n)
+		fs.Var(f.Value, f.Name, f.Usage)
+	}
+	return fs
+}
+
+// commands defines every flag on fs, once, and returns the commands.
 func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 	name := fs.String("name", "", "Name.")
 	retention := fs.Int("retention-days", 0, "Retention in days (1 to 3650).")
@@ -187,17 +238,17 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 		return nil
 	}
 	return map[string]command{
-		"tenant create": func(ctx context.Context, _ []string) error {
+		"tenant create": {[]string{"name", "retention-days"}, func(ctx context.Context, _ []string) error {
 			body := map[string]any{"name": *name}
 			if *retention != 0 {
 				body["retention_days"] = *retention
 			}
 			return c.show(ctx, "POST", "/v1/admin/tenants", body, []string{"id", "name", "status", "retention_days", "created_at"})
-		},
-		"tenant list": func(ctx context.Context, _ []string) error {
+		}},
+		"tenant list": {[]string{"limit"}, func(ctx context.Context, _ []string) error {
 			return c.list(ctx, "/v1/admin/tenants?limit=1000", *limit, []string{"id", "name", "status", "retention_days", "created_at"})
-		},
-		"tenant destroy": func(ctx context.Context, args []string) error {
+		}},
+		"tenant destroy": {[]string{"yes"}, func(ctx context.Context, args []string) error {
 			if err := need(args, "a tenant ID"); err != nil {
 				return err
 			}
@@ -205,11 +256,11 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				return errors.New("destroying a tenant deletes its keys and data for good; add -yes to confirm")
 			}
 			return c.show(ctx, "DELETE", "/v1/admin/tenants/"+url.PathEscape(args[0]), nil, []string{"job_id"})
-		},
-		"tenant show": func(ctx context.Context, _ []string) error {
+		}},
+		"tenant show": {nil, func(ctx context.Context, _ []string) error {
 			return c.show(ctx, "GET", "/v1/tenant", nil, []string{"id", "name", "status", "retention_days", "created_at"})
-		},
-		"tenant set-retention": func(ctx context.Context, args []string) error {
+		}},
+		"tenant set-retention": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "the retention in days"); err != nil {
 				return err
 			}
@@ -218,8 +269,8 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				return fmt.Errorf("retention must be a number of days: %w", err)
 			}
 			return c.show(ctx, "PATCH", "/v1/tenant", map[string]any{"retention_days": days}, []string{"id", "retention_days"})
-		},
-		"token create": func(ctx context.Context, _ []string) error {
+		}},
+		"token create": {[]string{"name", "scopes", "tenant"}, func(ctx context.Context, _ []string) error {
 			body := map[string]any{"name": *name, "scopes": splitList(*scopes)}
 			path := "/v1/tokens"
 			if c.operator() {
@@ -229,11 +280,11 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				path = "/v1/admin/tenants/" + url.PathEscape(*tenant) + "/tokens"
 			}
 			return c.show(ctx, "POST", path, body, []string{"id", "name", "scopes", "token"})
-		},
-		"token list": func(ctx context.Context, _ []string) error {
+		}},
+		"token list": {[]string{"limit"}, func(ctx context.Context, _ []string) error {
 			return c.list(ctx, "/v1/tokens?limit=1000", *limit, []string{"id", "name", "scopes", "created_at", "last_used_at", "revoked_at"})
-		},
-		"token revoke": func(ctx context.Context, args []string) error {
+		}},
+		"token revoke": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "a token ID"); err != nil {
 				return err
 			}
@@ -242,8 +293,8 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 			}
 			fmt.Fprintln(c.out, "revoked", args[0])
 			return nil
-		},
-		"enroll-token create": func(ctx context.Context, _ []string) error {
+		}},
+		"enroll-token create": {[]string{"count", "ttl", "tenant"}, func(ctx context.Context, _ []string) error {
 			body := map[string]any{"count": *count}
 			if *ttl != 0 {
 				if *ttl%time.Second != 0 {
@@ -269,22 +320,22 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				return fmt.Errorf("decode response: %w", err)
 			}
 			return c.print(resp.Tokens, []string{"token", "expires_at"}, false)
-		},
-		"device list": func(ctx context.Context, _ []string) error {
+		}},
+		"device list": {[]string{"status", "limit"}, func(ctx context.Context, _ []string) error {
 			q := url.Values{"limit": {"1000"}}
 			if *status != "" {
 				q.Set("status", *status)
 			}
 			return c.list(ctx, "/v1/devices?"+q.Encode(), *limit, []string{"id", "name", "status", "acked_seq", "last_seen_at", "cert_not_after"})
-		},
-		"device show": func(ctx context.Context, args []string) error {
+		}},
+		"device show": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "a device ID"); err != nil {
 				return err
 			}
 			return c.show(ctx, "GET", "/v1/devices/"+url.PathEscape(args[0]), nil,
 				[]string{"id", "name", "status", "acked_seq", "last_seen_at", "cert_not_after", "gap_count", "gap_seqs"})
-		},
-		"device revoke": func(ctx context.Context, args []string) error {
+		}},
+		"device revoke": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "a device ID"); err != nil {
 				return err
 			}
@@ -293,8 +344,8 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				path = "/v1/admin/devices/" + url.PathEscape(args[0]) + "/revoke"
 			}
 			return c.show(ctx, "POST", path, nil, []string{"id", "status", "revoked_at"})
-		},
-		"device delete": func(ctx context.Context, args []string) error {
+		}},
+		"device delete": {[]string{"yes"}, func(ctx context.Context, args []string) error {
 			if err := need(args, "a device ID"); err != nil {
 				return err
 			}
@@ -302,8 +353,8 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				return errors.New("deleting a device revokes it and deletes all its readings; add -yes to confirm")
 			}
 			return c.show(ctx, "DELETE", "/v1/devices/"+url.PathEscape(args[0]), nil, []string{"job_id", "status_url"})
-		},
-		"device readings": func(ctx context.Context, args []string) error {
+		}},
+		"device readings": {[]string{"from", "to", "metric", "limit"}, func(ctx context.Context, args []string) error {
 			if err := need(args, "a device ID"); err != nil {
 				return err
 			}
@@ -315,29 +366,29 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 			}
 			return c.list(ctx, "/v1/devices/"+url.PathEscape(args[0])+"/readings?"+q.Encode(), *limit,
 				[]string{"seq", "collected_at", "collector", "metric", "value", "labels"})
-		},
-		"device gaps": func(ctx context.Context, args []string) error {
+		}},
+		"device gaps": {[]string{"limit"}, func(ctx context.Context, args []string) error {
 			if err := need(args, "a device ID"); err != nil {
 				return err
 			}
 			return c.list(ctx, "/v1/devices/"+url.PathEscape(args[0])+"/gaps?limit=1000", *limit,
 				[]string{"from_seq", "to_seq", "reason", "reported_at"})
-		},
-		"export create": func(ctx context.Context, _ []string) error {
+		}},
+		"export create": {[]string{"device"}, func(ctx context.Context, _ []string) error {
 			var body map[string]any
 			if *device != "" {
 				body = map[string]any{"device_id": *device}
 			}
 			return c.show(ctx, "POST", "/v1/exports", body, []string{"id", "device_id", "status", "created_at"})
-		},
-		"export status": func(ctx context.Context, args []string) error {
+		}},
+		"export status": {nil, func(ctx context.Context, args []string) error {
 			if err := need(args, "an export ID"); err != nil {
 				return err
 			}
 			return c.show(ctx, "GET", "/v1/exports/"+url.PathEscape(args[0]), nil,
 				[]string{"id", "status", "reading_count", "bytes", "sha256", "expires_at", "error"})
-		},
-		"export download": func(ctx context.Context, args []string) error {
+		}},
+		"export download": {[]string{"out"}, func(ctx context.Context, args []string) error {
 			if err := need(args, "an export ID"); err != nil {
 				return err
 			}
@@ -345,14 +396,14 @@ func (c *cli) commands(fs *flag.FlagSet) map[string]command {
 				return errors.New("-out is required")
 			}
 			return c.download(ctx, "/v1/exports/"+url.PathEscape(args[0])+"/download", *outFile)
-		},
-		"audit list": func(ctx context.Context, _ []string) error {
+		}},
+		"audit list": {[]string{"limit"}, func(ctx context.Context, _ []string) error {
 			path := "/v1/audit?limit=1000"
 			if c.operator() {
 				path = "/v1/admin/audit?limit=1000"
 			}
 			return c.list(ctx, path, *limit, []string{"id", "at", "actor_type", "actor_id", "action", "target_type", "target_id", "result"})
-		},
+		}},
 	}
 }
 

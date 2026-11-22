@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -126,5 +128,60 @@ func TestEnrollTokenTTLMustBeWholeSeconds(t *testing.T) {
 	err := run(t.Context(), []string{"enroll-token", "create", "-ttl", "500ms"}, func(k string) string { return env[k] }, &out, &errOut)
 	if err == nil || !strings.Contains(err.Error(), "-ttl") {
 		t.Fatalf("-ttl 500ms: %v, want an error about -ttl", err)
+	}
+}
+
+// fwctlEnv runs fwctl with the given URL and a token, and no real API.
+func fwctlEnv(t *testing.T, base string, args ...string) (string, error) {
+	t.Helper()
+	env := map[string]string{"FWCTL_URL": base, "FWCTL_TOKEN": "fwt_unused"}
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), args, func(k string) string { return env[k] }, &out, &errOut)
+	return out.String(), err
+}
+
+func TestCommandsRejectFlagsTheyDoNotTake(t *testing.T) {
+	for _, args := range [][]string{
+		{"device", "show", "ID", "-yes"},
+		{"tenant", "list", "-name", "x"},
+		{"export", "status", "ID", "-out", "f"},
+	} {
+		_, err := fwctlEnv(t, "https://127.0.0.1:1", args...)
+		if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
+			t.Errorf("fwctl %v: %v, want an undefined-flag error", args, err)
+		}
+	}
+	// Every flag a command lists exists.
+	all := flag.NewFlagSet("all", flag.ContinueOnError)
+	for name, c := range (&cli{}).commands(all) {
+		for _, f := range c.flags {
+			if all.Lookup(f) == nil {
+				t.Errorf("%s lists -%s, which is not defined", name, f)
+			}
+		}
+	}
+}
+
+func TestParseInterleavedStopsAtDoubleDash(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		pos  []string
+		yes  bool
+		out  string
+	}{
+		{[]string{"ID", "-yes"}, []string{"ID"}, true, ""},
+		{[]string{"ID", "-yes", "--", "-not-a-flag", "x"}, []string{"ID", "-not-a-flag", "x"}, true, ""},
+		{[]string{"--", "-yes"}, []string{"-yes"}, false, ""},
+		{[]string{"-out", "--", "ID", "-yes"}, []string{"ID"}, true, "--"},
+		{[]string{"ID", "--"}, []string{"ID"}, false, ""},
+	} {
+		fs := flag.NewFlagSet("t", flag.ContinueOnError)
+		yes := fs.Bool("yes", false, "")
+		out := fs.String("out", "", "")
+		pos, err := parseInterleaved(fs, c.args)
+		if err != nil || !slices.Equal(pos, c.pos) || *yes != c.yes || *out != c.out {
+			t.Errorf("parseInterleaved(%q) = %q, -yes %v, -out %q, %v; want %q, %v, %q",
+				c.args, pos, *yes, *out, err, c.pos, c.yes, c.out)
+		}
 	}
 }
