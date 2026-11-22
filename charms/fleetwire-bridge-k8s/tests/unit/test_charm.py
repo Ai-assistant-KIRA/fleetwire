@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import ops
 import pytest
 from ops import testing
@@ -129,21 +131,44 @@ def test_losing_the_broker_stops_the_bridge(ctx):
     assert out.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.INACTIVE
 
 
-def test_a_rotated_certificate_restarts_the_bridge(ctx):
-    st = setup()
-    running = ctx.run(ctx.on.config_changed(), st)
+def rotate(running: testing.State, **changes: str) -> tuple[testing.Secret, testing.State]:
+    """The running state with the PKI secret's latest revision changed."""
     secret = next(iter(running.secrets))
-    rotated = testing.Secret(
-        id=secret.id, tracked_content=secret.tracked_content, latest_content={**PKI, "tls-cert": "NEW CERT"}
-    )
-    st2 = testing.State(
-        leader=True,
-        config=running.config,
-        relations=running.relations,
-        secrets=[rotated],
-        containers=running.containers,
-        model=running.model,
-    )
-    out = ctx.run(ctx.on.secret_changed(rotated), st2)
+    rotated = dataclasses.replace(secret, latest_content={**PKI, **changes})
+    return rotated, dataclasses.replace(running, secrets=[rotated])
+
+
+def test_a_rotated_certificate_restarts_the_bridge(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    before = running.get_container(CONTAINER).plan.services[SERVICE].environment
+    rotated, st = rotate(running, **{"tls-cert": "NEW CERT"})
+    out = ctx.run(ctx.on.secret_changed(rotated), st)
     fs = out.get_container(CONTAINER).get_filesystem(ctx)
     assert (fs / "etc/fleetwire/pki/bridge.pem").read_text() == "NEW CERT"
+    # The bridge reads its certificate once. Pebble's replan restarts a
+    # service whose definition changed, and only the digest of the files
+    # changes it here.
+    after = out.get_container(CONTAINER).plan.services[SERVICE].environment
+    assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
+    assert {k: v for k, v in after.items() if k != "FLEETWIRE_CONFIG_SHA256"} == {
+        k: v for k, v in before.items() if k != "FLEETWIRE_CONFIG_SHA256"
+    }
+
+
+def test_a_new_kafka_ca_restarts_the_bridge(ctx):
+    tls = {**KAFKA, "tls": "enabled", "tls-ca": "KAFKA CA 1"}
+    running = ctx.run(ctx.on.config_changed(), setup(kafka=tls))
+    before = running.get_container(CONTAINER).plan.services[SERVICE].environment
+    kafka = next(r for r in running.relations if r.endpoint == "kafka")
+    renewed = dataclasses.replace(kafka, remote_app_data={**tls, "tls-ca": "KAFKA CA 2"})
+    st = dataclasses.replace(running, relations=[r for r in running.relations if r.endpoint != "kafka"] + [renewed])
+    # Whichever hook runs next writes the new CA; update-status always runs.
+    out = ctx.run(ctx.on.update_status(), st)
+    after = out.get_container(CONTAINER).plan.services[SERVICE].environment
+    assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
+
+
+def test_an_unchanged_secret_keeps_the_bridge_running(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    out = ctx.run(ctx.on.update_status(), running)
+    assert out.get_container(CONTAINER).plan == running.get_container(CONTAINER).plan

@@ -10,6 +10,7 @@ still missing.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import urllib.request
 from dataclasses import dataclass
@@ -42,6 +43,20 @@ def readyz(port: int) -> bool:
             return resp.status == 200
     except OSError:
         return False
+
+
+def files_digest(files: dict[str, str]) -> str:
+    """SHA-256 over the paths and contents of the files written for the service.
+
+    The bridge reads its certificates once, at start. The digest goes into
+    the layer's environment, so a rotated certificate changes the layer and
+    replan restarts the service with the new files.
+    """
+    h = hashlib.sha256()
+    for path in sorted(files):
+        data = files[path].encode()
+        h.update(path.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
+    return h.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -150,11 +165,12 @@ class FleetwireBridgeCharm(ops.CharmBase):
             return
         if self._config_problem() or not self._container.can_connect():
             return
-        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
-        for key, name in PKI_FILES.items():
-            self._container.push(f"{PKI}/{name}", pki[key], **own)
+        files = {f"{PKI}/{name}": pki[key] for key, name in PKI_FILES.items()}
         if kafka.tls_ca:
-            self._container.push(f"{PKI}/kafka-ca.pem", kafka.tls_ca, **own)
+            files[f"{PKI}/kafka-ca.pem"] = kafka.tls_ca
+        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
+        for path, content in files.items():
+            self._container.push(path, content, **own)
         env = {
             "FLEETWIRE_MQTT_URL": mqtt,
             "FLEETWIRE_MQTT_CERT_FILE": f"{PKI}/bridge.pem",
@@ -169,6 +185,8 @@ class FleetwireBridgeCharm(ops.CharmBase):
             "FLEETWIRE_ADMIN_LISTEN": f":{ADMIN_PORT}",
             "FLEETWIRE_INSTANCE_ID": self.unit.name.replace("/", "-"),
             "FLEETWIRE_LOG_LEVEL": str(self.config["log-level"]),
+            # Not read by the bridge: a new value makes replan restart it.
+            "FLEETWIRE_CONFIG_SHA256": files_digest(files),
         }
         if kafka.tls_ca:
             env["FLEETWIRE_KAFKA_TLS_CA_FILE"] = f"{PKI}/kafka-ca.pem"
