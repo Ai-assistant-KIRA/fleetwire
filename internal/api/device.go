@@ -35,9 +35,10 @@ func clientIP(r *http.Request) string {
 
 // enroll turns a one-time token and a CSR into a device identity. The
 // server picks the device ID; the CSR subject is ignored (ADR-0009). Failed
-// attempts are audited, under the token's tenant when the token is known.
+// attempts are audited, under the token's tenant when the token is known,
+// at the rate auditRefusal allows.
 func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
-	if !s.enrollLim.allow(w, r, "ip:"+clientIP(r)) {
+	if !s.enrollLim.allow(w, r, "ip:"+clientNet(r)) {
 		return
 	}
 	var req struct {
@@ -83,6 +84,9 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if outcome != store.EnrollOK {
+			if !s.auditRefusal(tenant, hash, clientNet(r)) {
+				return nil
+			}
 			if tenant != uuid.Nil {
 				if err := tx.SetTenant(ctx, tenant); err != nil {
 					return err
@@ -94,7 +98,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 			if hash != nil {
 				a.TargetID = hex.EncodeToString(hash[:4])
 			}
-			a.Details = map[string]any{"outcome": outcome}
+			a.Details = map[string]any{"outcome": outcome, "rate_limited": refusalAuditEvery.String()}
 			// Committed on purpose: the refusal is the audit record.
 			return tx.InsertAudit(ctx, a)
 		}
@@ -125,6 +129,9 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeProblem(w, r, s.internal(r, err))
 		return
+	}
+	if outcome != store.EnrollOK {
+		s.metrics.enrollRefusals.WithLabelValues(outcome).Inc()
 	}
 	switch outcome {
 	case store.EnrollOK:
@@ -226,6 +233,9 @@ func (s *Server) renew(w http.ResponseWriter, r *http.Request) {
 // is public: the list is signed by the Device Issuing CA and holds only
 // serial numbers. Brokers that cannot read the API's CRL file fetch it here.
 func (s *Server) getCRL(w http.ResponseWriter, r *http.Request) {
+	if !s.enrollLim.allow(w, r, "crl:"+clientNet(r)) {
+		return
+	}
 	pemBytes := s.crl.Latest()
 	if pemBytes == nil {
 		writeProblem(w, r, &apiError{status: http.StatusServiceUnavailable, code: "crl_not_ready",

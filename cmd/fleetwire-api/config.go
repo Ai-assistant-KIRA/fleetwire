@@ -45,12 +45,14 @@ type apiConfig struct {
 	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h (the design republishes it daily)."`
 	ExportDir   string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
 
-	RateLimit       float64       `env:"FLEETWIRE_API_RATE_LIMIT" flag:"rate-limit" default:"20" help:"Requests per second per token."`
-	RateBurst       int           `env:"FLEETWIRE_API_RATE_BURST" flag:"rate-burst" default:"40" help:"Burst size per token."`
-	EnrollRateLimit float64       `env:"FLEETWIRE_API_ENROLL_RATE_LIMIT" flag:"enroll-rate-limit" default:"50" help:"Enrollments per second per client address."`
-	EnrollRateBurst int           `env:"FLEETWIRE_API_ENROLL_RATE_BURST" flag:"enroll-rate-burst" default:"200" help:"Enrollment burst per client address."`
-	EnrollTokenTTL  time.Duration `env:"FLEETWIRE_ENROLL_TOKEN_TTL" flag:"enroll-token-ttl" default:"15m" help:"Default lifetime of enrollment tokens."`
-	JobWorkers      int           `env:"FLEETWIRE_JOB_WORKERS" flag:"job-workers" default:"2" help:"Background jobs run in parallel by this replica."`
+	RateLimit         float64       `env:"FLEETWIRE_API_RATE_LIMIT" flag:"rate-limit" default:"20" help:"Requests per second per token."`
+	RateBurst         int           `env:"FLEETWIRE_API_RATE_BURST" flag:"rate-burst" default:"40" help:"Burst size per token."`
+	AuthFailRateLimit float64       `env:"FLEETWIRE_API_AUTH_FAILURE_RATE_LIMIT" flag:"auth-failure-rate-limit" default:"5" help:"Failed token lookups per second per client network (IPv4 address or IPv6 /64). A network over this budget gets 429 before its tokens are looked up."`
+	AuthFailRateBurst int           `env:"FLEETWIRE_API_AUTH_FAILURE_RATE_BURST" flag:"auth-failure-rate-burst" default:"50" help:"Failed token lookup burst per client network."`
+	EnrollRateLimit   float64       `env:"FLEETWIRE_API_ENROLL_RATE_LIMIT" flag:"enroll-rate-limit" default:"50" help:"Enrollment and CRL requests per second per client network (IPv4 address or IPv6 /64), counted separately."`
+	EnrollRateBurst   int           `env:"FLEETWIRE_API_ENROLL_RATE_BURST" flag:"enroll-rate-burst" default:"200" help:"Enrollment and CRL burst per client network."`
+	EnrollTokenTTL    time.Duration `env:"FLEETWIRE_ENROLL_TOKEN_TTL" flag:"enroll-token-ttl" default:"15m" help:"Default lifetime of enrollment tokens."`
+	JobWorkers        int           `env:"FLEETWIRE_JOB_WORKERS" flag:"job-workers" default:"2" help:"Background jobs run in parallel by this replica."`
 
 	LogLevel         string  `env:"FLEETWIRE_LOG_LEVEL" flag:"log-level" default:"info" help:"debug, info, warn or error."`
 	OTLPEndpoint     string  `env:"FLEETWIRE_OTLP_ENDPOINT" flag:"otlp-endpoint" help:"OTLP/HTTP endpoint for traces, for example http://jaeger:4318. Empty disables tracing."`
@@ -91,6 +93,9 @@ func (c *apiConfig) Validate() []error {
 		// A bucket with no room refuses every request, whatever the rate.
 		if c.RateLimit <= 0 || c.RateBurst < 1 {
 			errs = append(errs, errors.New("FLEETWIRE_API_RATE_LIMIT must be positive and FLEETWIRE_API_RATE_BURST at least 1"))
+		}
+		if c.AuthFailRateLimit <= 0 || c.AuthFailRateBurst < 1 {
+			errs = append(errs, errors.New("FLEETWIRE_API_AUTH_FAILURE_RATE_LIMIT must be positive and FLEETWIRE_API_AUTH_FAILURE_RATE_BURST at least 1"))
 		}
 		if c.EnrollRateLimit <= 0 || c.EnrollRateBurst < 1 {
 			errs = append(errs, errors.New("FLEETWIRE_API_ENROLL_RATE_LIMIT must be positive and FLEETWIRE_API_ENROLL_RATE_BURST at least 1"))

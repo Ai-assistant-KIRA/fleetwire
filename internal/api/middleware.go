@@ -87,8 +87,9 @@ func (r *recorder) Write(b []byte) (int, error) {
 func (r *recorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 type httpMetrics struct {
-	requests *prometheus.CounterVec
-	seconds  *prometheus.HistogramVec
+	requests       *prometheus.CounterVec
+	seconds        *prometheus.HistogramVec
+	enrollRefusals *prometheus.CounterVec
 }
 
 func newHTTPMetrics(reg prometheus.Registerer) *httpMetrics {
@@ -100,8 +101,12 @@ func newHTTPMetrics(reg prometheus.Registerer) *httpMetrics {
 			Name: "fleetwire_api_request_seconds", Help: "API request duration by route pattern.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"listener", "route"}),
+		// The audit log keeps a sample of refusals; this counts all of them.
+		enrollRefusals: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "fleetwire_api_enroll_refusals_total", Help: "Refused enrollments by outcome (unknown, expired, used, tenant_inactive).",
+		}, []string{"outcome"}),
 	}
-	reg.MustRegister(m.requests, m.seconds)
+	reg.MustRegister(m.requests, m.seconds, m.enrollRefusals)
 	return m
 }
 

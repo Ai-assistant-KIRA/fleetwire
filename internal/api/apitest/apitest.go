@@ -117,6 +117,7 @@ func New(t *testing.T, opts ...Option) *Harness {
 		ExportDir:    h.ExportDir,
 		// High defaults so tests that are not about rate limits never hit them.
 		RatePerSecond: 10_000, RateBurst: 10_000, EnrollPerSecond: 10_000, EnrollBurst: 10_000,
+		AuthFailPerSecond: 10_000, AuthFailBurst: 10_000,
 	}
 	for _, o := range opts {
 		o(&cfg)

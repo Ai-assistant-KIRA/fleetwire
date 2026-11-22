@@ -198,19 +198,21 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	}, func() float64 { return pub.Age().Seconds() }))
 
 	srv := api.New(api.Config{
-		PublicAddr:      cfg.PublicListen,
-		DeviceAddr:      cfg.DeviceListen,
-		PublicTLS:       &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12},
-		DeviceTLS:       &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: deviceCAs},
-		CABundlePEM:     bundle,
-		BrokerURL:       cfg.DeviceBrokerURL,
-		DeviceAPIURL:    cfg.DeviceAPIURL,
-		RatePerSecond:   cfg.RateLimit,
-		RateBurst:       cfg.RateBurst,
-		EnrollPerSecond: cfg.EnrollRateLimit,
-		EnrollBurst:     cfg.EnrollRateBurst,
-		EnrollTokenTTL:  cfg.EnrollTokenTTL,
-		ExportDir:       cfg.ExportDir,
+		PublicAddr:        cfg.PublicListen,
+		DeviceAddr:        cfg.DeviceListen,
+		PublicTLS:         &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12},
+		DeviceTLS:         &tls.Config{Certificates: []tls.Certificate{serverCert}, MinVersion: tls.VersionTLS12, ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: deviceCAs},
+		CABundlePEM:       bundle,
+		BrokerURL:         cfg.DeviceBrokerURL,
+		DeviceAPIURL:      cfg.DeviceAPIURL,
+		RatePerSecond:     cfg.RateLimit,
+		RateBurst:         cfg.RateBurst,
+		AuthFailPerSecond: cfg.AuthFailRateLimit,
+		AuthFailBurst:     cfg.AuthFailRateBurst,
+		EnrollPerSecond:   cfg.EnrollRateLimit,
+		EnrollBurst:       cfg.EnrollRateBurst,
+		EnrollTokenTTL:    cfg.EnrollTokenTTL,
+		ExportDir:         cfg.ExportDir,
 	}, api.Deps{DB: db, Keyring: kr, Keys: keys, DeviceCA: ca, CRL: pub, CursorKey: cursorKey, Log: log, Registry: reg})
 
 	worker := jobs.NewWorker(jobs.Config{

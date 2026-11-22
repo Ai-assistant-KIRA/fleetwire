@@ -15,7 +15,8 @@ func serveConfig() apiConfig {
 		DeviceTrustFile: "trust.pem", DeviceCACertFile: "ca.pem", DeviceCAKeyFile: "ca-key.pem", CABundleFile: "bundle.pem",
 		DeviceBrokerURL: "tls://broker:8883", DeviceAPIURL: "https://api:8444", KeyringDir: "keys",
 		KeyringRootKeyFile: "root.key", CRLFile: "crl.pem", ExportDir: "exports", CRLInterval: 24 * time.Hour,
-		RateLimit: 20, RateBurst: 40, EnrollRateLimit: 50, EnrollRateBurst: 200, EnrollTokenTTL: 15 * time.Minute,
+		RateLimit: 20, RateBurst: 40, AuthFailRateLimit: 5, AuthFailRateBurst: 50, EnrollRateLimit: 50, EnrollRateBurst: 200,
+		EnrollTokenTTL: 15 * time.Minute,
 	}
 }
 
@@ -36,6 +37,8 @@ func TestRateLimitsAndEnrollTTLMustBeUsable(t *testing.T) {
 		"rate burst 0":         {func(c *apiConfig) { c.RateBurst = 0 }, "FLEETWIRE_API_RATE_BURST"},
 		"rate limit 0":         {func(c *apiConfig) { c.RateLimit = 0 }, "FLEETWIRE_API_RATE_LIMIT"},
 		"negative rate":        {func(c *apiConfig) { c.RateLimit = -1 }, "FLEETWIRE_API_RATE_LIMIT"},
+		"auth failure burst 0": {func(c *apiConfig) { c.AuthFailRateBurst = 0 }, "FLEETWIRE_API_AUTH_FAILURE_RATE_BURST"},
+		"auth failure rate 0":  {func(c *apiConfig) { c.AuthFailRateLimit = 0 }, "FLEETWIRE_API_AUTH_FAILURE_RATE_LIMIT"},
 		"enroll burst 0":       {func(c *apiConfig) { c.EnrollRateBurst = 0 }, "FLEETWIRE_API_ENROLL_RATE_BURST"},
 		"enroll rate 0":        {func(c *apiConfig) { c.EnrollRateLimit = 0 }, "FLEETWIRE_API_ENROLL_RATE_LIMIT"},
 		"enroll ttl too short": {func(c *apiConfig) { c.EnrollTokenTTL = 59 * time.Second }, "FLEETWIRE_ENROLL_TOKEN_TTL"},

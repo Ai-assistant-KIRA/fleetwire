@@ -19,6 +19,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/crl"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/crypto/keyring"
@@ -42,8 +43,15 @@ type Config struct {
 	BrokerURL    string
 	DeviceAPIURL string
 
-	RatePerSecond   float64
-	RateBurst       int
+	RatePerSecond float64
+	RateBurst     int
+	// AuthFailPerSecond and AuthFailBurst bound failed token lookups per
+	// client network. A network over the budget is refused before its
+	// tokens reach the database.
+	AuthFailPerSecond float64
+	AuthFailBurst     int
+	// EnrollPerSecond and EnrollBurst limit enrollment and CRL requests
+	// per client network.
 	EnrollPerSecond float64
 	EnrollBurst     int
 	EnrollTokenTTL  time.Duration
@@ -64,20 +72,25 @@ type Deps struct {
 
 // Server serves the API.
 type Server struct {
-	cfg       Config
-	db        *store.DB
-	kr        keyring.Keyring
-	keys      *tenantkey.Manager
-	ca        *pki.CA
-	crl       *crl.Publisher
-	cur       cursors
-	log       *slog.Logger
-	metrics   *httpMetrics
-	limiter   *limiter
-	enrollLim *limiter
-	lastTouch *lru.Cache[uuid.UUID, time.Time]
-	touches   chan *principal
-	now       func() time.Time
+	cfg         Config
+	db          *store.DB
+	kr          keyring.Keyring
+	keys        *tenantkey.Manager
+	ca          *pki.CA
+	crl         *crl.Publisher
+	cur         cursors
+	log         *slog.Logger
+	metrics     *httpMetrics
+	limiter     *limiter
+	authFailLim *limiter
+	enrollLim   *limiter
+	// refusals and fleetRefusals bound audit entries for refused
+	// enrollments (see auditRefusal).
+	refusals      *lru.Cache[string, time.Time]
+	fleetRefusals *rate.Limiter
+	lastTouch     *lru.Cache[uuid.UUID, time.Time]
+	touches       chan *principal
+	now           func() time.Time
 }
 
 // New builds a server.
@@ -85,29 +98,35 @@ func New(cfg Config, d Deps) *Server {
 	if cfg.RatePerSecond <= 0 {
 		cfg.RatePerSecond, cfg.RateBurst = 20, 40
 	}
+	if cfg.AuthFailPerSecond <= 0 {
+		cfg.AuthFailPerSecond, cfg.AuthFailBurst = 5, 50
+	}
 	if cfg.EnrollPerSecond <= 0 {
 		cfg.EnrollPerSecond, cfg.EnrollBurst = 50, 200
 	}
 	// A bucket with no room refuses every request, whatever the rate.
-	cfg.RateBurst, cfg.EnrollBurst = max(cfg.RateBurst, 1), max(cfg.EnrollBurst, 1)
+	cfg.RateBurst, cfg.AuthFailBurst, cfg.EnrollBurst = max(cfg.RateBurst, 1), max(cfg.AuthFailBurst, 1), max(cfg.EnrollBurst, 1)
 	if cfg.EnrollTokenTTL <= 0 {
 		cfg.EnrollTokenTTL = 15 * time.Minute
 	}
 	return &Server{
-		cfg:       cfg,
-		db:        d.DB,
-		kr:        d.Keyring,
-		keys:      d.Keys,
-		ca:        d.DeviceCA,
-		crl:       d.CRL,
-		cur:       cursors{key: d.CursorKey},
-		log:       d.Log,
-		metrics:   newHTTPMetrics(d.Registry),
-		limiter:   newLimiter(cfg.RatePerSecond, cfg.RateBurst),
-		enrollLim: newLimiter(cfg.EnrollPerSecond, cfg.EnrollBurst),
-		lastTouch: lru.New[uuid.UUID, time.Time](100_000, 0),
-		touches:   make(chan *principal, 1024),
-		now:       time.Now,
+		cfg:           cfg,
+		db:            d.DB,
+		kr:            d.Keyring,
+		keys:          d.Keys,
+		ca:            d.DeviceCA,
+		crl:           d.CRL,
+		cur:           cursors{key: d.CursorKey},
+		log:           d.Log,
+		metrics:       newHTTPMetrics(d.Registry),
+		limiter:       newLimiter(cfg.RatePerSecond, cfg.RateBurst),
+		authFailLim:   newLimiter(cfg.AuthFailPerSecond, cfg.AuthFailBurst),
+		enrollLim:     newLimiter(cfg.EnrollPerSecond, cfg.EnrollBurst),
+		refusals:      lru.New[string, time.Time](100_000, 0),
+		fleetRefusals: rate.NewLimiter(rate.Every(fleetRefusalEvery), fleetRefusalBurst),
+		lastTouch:     lru.New[uuid.UUID, time.Time](100_000, 0),
+		touches:       make(chan *principal, 1024),
+		now:           time.Now,
 	}
 }
 

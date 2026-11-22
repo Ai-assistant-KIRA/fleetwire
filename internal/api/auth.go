@@ -34,20 +34,70 @@ func (p *principal) actorID() string { return p.tokenID.String() }
 
 func (p *principal) has(scope string) bool { return slices.Contains(p.scopes, scope) }
 
-// authenticate resolves the bearer token. Every failure looks the same to
-// the client: which part was wrong is not revealed.
-func (s *Server) authenticate(r *http.Request) (*principal, *apiError) {
+// bearer parses the Authorization header without touching the database.
+// It accepts only tenant and operator tokens.
+func bearer(r *http.Request) (tokens.Parsed, bool) {
 	// The scheme name is case-insensitive (RFC 9110, section 11.1).
 	scheme, raw, ok := strings.Cut(r.Header.Get("Authorization"), " ")
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
-		return nil, errUnauthorized
+		return tokens.Parsed{}, false
 	}
 	tok, err := tokens.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return nil, errUnauthorized
+	if err != nil || (tok.Prefix != tokens.PrefixTenant && tok.Prefix != tokens.PrefixOperator) {
+		return tokens.Parsed{}, false
 	}
+	return tok, true
+}
+
+// authorize runs the checks every authenticated route shares, in an order
+// that keeps unauthenticated traffic away from the database:
+//
+//  1. A client network that keeps failing authentication is refused
+//     before its token is looked up.
+//  2. A token whose bucket is empty is refused before the lookup too.
+//     Only authenticated requests take from that bucket, so a caller who
+//     knows a token ID but not its secret cannot use up its budget.
+//  3. The lookup. A failed lookup takes from the network's failure budget.
+//  4. The token's rate limit. Routes check scopes after this, so a token
+//     cannot make forbidden calls faster than allowed ones.
+//
+// It writes the error response itself and reports whether to go on.
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (*principal, bool) {
+	network := "n:" + clientNet(r)
+	if !s.authFailLim.ready(w, r, network) {
+		return nil, false
+	}
+	tok, ok := bearer(r)
+	if !ok {
+		writeProblem(w, r, errUnauthorized)
+		return nil, false
+	}
+	key := "t:" + tok.ID.String()
+	if tok.Prefix == tokens.PrefixOperator {
+		key = "o:" + tok.ID.String()
+	}
+	if !s.limiter.ready(w, r, key) {
+		return nil, false
+	}
+	p, e := s.authenticate(r, tok)
+	if e != nil {
+		if e == errUnauthorized {
+			s.authFailLim.take(network)
+		}
+		writeProblem(w, r, e)
+		return nil, false
+	}
+	if !s.limiter.allow(w, r, key) {
+		return nil, false
+	}
+	return p, true
+}
+
+// authenticate looks the parsed token up. Every failure looks the same to
+// the client: which part was wrong is not revealed.
+func (s *Server) authenticate(r *http.Request, tok tokens.Parsed) (*principal, *apiError) {
 	var p *principal
-	err = s.db.InTx(r.Context(), func(ctx context.Context, tx *store.Tx) error {
+	err := s.db.InTx(r.Context(), func(ctx context.Context, tx *store.Tx) error {
 		switch tok.Prefix {
 		case tokens.PrefixTenant:
 			a, err := tx.LookupAPIToken(ctx, tok.ID)
@@ -122,16 +172,12 @@ type handler func(w http.ResponseWriter, r *http.Request, p *principal) *apiErro
 // tenantRoute requires a tenant token with scope.
 func (s *Server) tenantRoute(scope string, h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, e := s.authenticate(r)
-		if e != nil {
-			writeProblem(w, r, e)
+		p, ok := s.authorize(w, r)
+		if !ok {
 			return
 		}
 		if p.operator || !p.has(scope) {
 			writeProblem(w, r, errForbidden)
-			return
-		}
-		if !s.limiter.allow(w, r, "t:"+p.tokenID.String()) {
 			return
 		}
 		if e := h(w, r, p); e != nil {
@@ -143,16 +189,12 @@ func (s *Server) tenantRoute(scope string, h handler) http.Handler {
 // operatorRoute requires an operator token.
 func (s *Server) operatorRoute(h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		p, e := s.authenticate(r)
-		if e != nil {
-			writeProblem(w, r, e)
+		p, ok := s.authorize(w, r)
+		if !ok {
 			return
 		}
 		if !p.operator {
 			writeProblem(w, r, errForbidden)
-			return
-		}
-		if !s.limiter.allow(w, r, "o:"+p.tokenID.String()) {
 			return
 		}
 		if e := h(w, r, p); e != nil {
