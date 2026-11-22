@@ -222,8 +222,9 @@ headless `<application>-endpoints` service Juju creates.
 
 ## Limits of this deployment
 
-- **One API unit.** The local keyring keeps the tenant KEKs on the unit's
-  storage, so the charm blocks if the application is scaled up. Ingest and
+- **One API unit and one broker.** The local keyring keeps the tenant KEKs
+  on the unit's storage, and Mosquitto keeps sessions and retained acks in
+  its own; both charms block if their application is scaled up. Ingest and
   the bridge scale out.
 - **Broker-side revocation lags** by up to the update-status interval
   (5 minutes by default, `juju model-config update-status-hook-interval`).
@@ -231,6 +232,12 @@ headless `<application>-endpoints` service Juju creates.
 - **One Kafka broker** in the bundle, with `kafka-replication: 1`. For three
   brokers, `juju add-unit kafka-k8s -n 2` and set `kafka-replication: 3`
   before ingest first starts.
+- **Database and Kafka passwords are in the Pebble plan.** The services read
+  their settings from the environment, so the charms put the runtime logins'
+  database URLs and the Kafka passwords in the service environment, where
+  anyone who can run commands in the unit's pod (`juju ssh`,
+  `kubectl exec`) can read them. Certificates and keys are files with mode
+  0600.
 
 ## Integration test
 
