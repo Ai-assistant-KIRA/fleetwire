@@ -68,6 +68,13 @@ func TestCheckerPassesAndCatchesProblems(t *testing.T) {
 		t.Fatalf("missing seqs not caught: %+v", bad)
 	}
 
+	// Seqs stored above the device's last seq mean the device lost the
+	// state that numbered them; nothing is missing, but the check fails.
+	beyond := c.Run(t.Context(), []checker.Expectation{{DeviceID: devs[1], LastSeq: 90}})
+	if beyond.OK() || beyond.Beyond != 10 || beyond.Missing != 0 || beyond.Failed[0].Beyond != 10 {
+		t.Fatalf("seqs beyond the last seq not caught: %+v", beyond)
+	}
+
 	// Plant a duplicate directly in the database. The exclusion constraint
 	// forbids it, so this test removes the constraint for one insert: the
 	// checker must catch duplicates on its own, not trust the constraint.

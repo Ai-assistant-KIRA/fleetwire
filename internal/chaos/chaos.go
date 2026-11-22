@@ -69,6 +69,7 @@ type Row struct {
 	Missing    uint64    `json:"missing"`
 	Duplicates uint64    `json:"duplicates"`
 	GapSeqs    uint64    `json:"gap_seqs"`
+	Beyond     uint64    `json:"beyond_last_seq"`
 	Unrecorded uint64    `json:"unrecorded_gap_seqs"`
 	Recovery   string    `json:"recovery"`
 	WALSync    string    `json:"wal_sync"`
@@ -453,17 +454,56 @@ func (r *run) check(ctx context.Context, row Row) (Row, error) {
 	if err != nil {
 		return row, err
 	}
-	var rep struct {
-		Readings, Stored, Missing, Duplicates, GapSeqs uint64
-		Unrecorded                                     uint64 `json:"unrecorded_gap_seqs"`
-		Errors                                         int
-	}
+	var rep checkerReport
 	if err := json.Unmarshal(data, &rep); err != nil {
-		return row, err
+		return row, fmt.Errorf("checker report: %w", err)
 	}
-	row.Readings, row.Stored, row.Missing, row.Duplicates, row.GapSeqs, row.Unrecorded = rep.Readings, rep.Stored, rep.Missing, rep.Duplicates, rep.GapSeqs, rep.Unrecorded
-	row.Pass = rep.Missing == 0 && rep.Duplicates == 0 && rep.Unrecorded == 0 && rep.Errors == 0 && rep.Readings > 0
-	return row, nil
+	return judge(row, rep), nil
+}
+
+// checkerReport is the part of fleetwire-checker's JSON report
+// (checker.Report) that the results use.
+type checkerReport struct {
+	Readings   uint64 `json:"readings"`
+	Stored     uint64 `json:"stored"`
+	Missing    uint64 `json:"missing"`
+	Duplicates uint64 `json:"duplicates"`
+	GapSeqs    uint64 `json:"gap_seqs"`
+	Beyond     uint64 `json:"beyond_last_seq"`
+	Unrecorded uint64 `json:"unrecorded_gap_seqs"`
+	Errors     int    `json:"errors"`
+}
+
+// judge copies the checker's counts into the row and decides the result.
+// Failures the table has no column for are spelled out in the note.
+func judge(row Row, rep checkerReport) Row {
+	row.Readings, row.Stored, row.Missing, row.Duplicates = rep.Readings, rep.Stored, rep.Missing, rep.Duplicates
+	row.GapSeqs, row.Beyond, row.Unrecorded = rep.GapSeqs, rep.Beyond, rep.Unrecorded
+	var why []string
+	if rep.Beyond > 0 {
+		why = append(why, fmt.Sprintf("%d stored seqs above the devices' last seq", rep.Beyond))
+	}
+	if rep.Unrecorded > 0 {
+		why = append(why, fmt.Sprintf("%d reported gap seqs not recorded", rep.Unrecorded))
+	}
+	if rep.Errors > 0 {
+		why = append(why, fmt.Sprintf("checker errors on %d devices", rep.Errors))
+	}
+	if rep.Readings == 0 {
+		why = append(why, "no readings")
+	}
+	row.Pass = rep.Missing == 0 && rep.Duplicates == 0 && len(why) == 0
+	if len(why) > 0 {
+		row.Note = joinNote(row.Note, strings.Join(why, "; "))
+	}
+	return row
+}
+
+func joinNote(note, more string) string {
+	if note == "" {
+		return more
+	}
+	return note + "; " + more
 }
 
 // toxi calls the Toxiproxy API and retries for about a minute. A fault

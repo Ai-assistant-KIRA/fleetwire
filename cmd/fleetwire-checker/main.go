@@ -4,7 +4,8 @@
 //	fleetwire-checker -results results.jsonl          load-generator run
 //	fleetwire-checker -device ID -last-seq N [-gaps a-b,c-d]   one device (Ubuntu Core VM)
 //
-// It exits 1 when anything is missing or duplicated.
+// It exits 1 when anything is missing or duplicated, or when a seq above
+// the device's last seq is stored (the device lost its state).
 package main
 
 import (
@@ -76,11 +77,11 @@ func run(args []string, out io.Writer) (bool, error) {
 	}
 	c := &checker.Checker{DB: db, Keys: tenantkey.New(db, kr, slog.New(slog.DiscardHandler)), Workers: *workers}
 	rep := c.Run(ctx, exps)
-	fmt.Fprintf(out, "devices %d  readings %d  stored %d  missing %d  duplicates %d  gap seqs %d  unrecorded gap seqs %d  errors %d\n",
-		rep.Devices, rep.Readings, rep.Stored, rep.Missing, rep.Duplicates, rep.GapSeqs, rep.LostReports, rep.Errors)
+	fmt.Fprintf(out, "devices %d  readings %d  stored %d  missing %d  duplicates %d  gap seqs %d  beyond last seq %d  unrecorded gap seqs %d  errors %d\n",
+		rep.Devices, rep.Readings, rep.Stored, rep.Missing, rep.Duplicates, rep.GapSeqs, rep.Beyond, rep.LostReports, rep.Errors)
 	for _, f := range rep.Failed {
-		fmt.Fprintf(out, "  %s: missing %d %v, duplicates %d %v, unrecorded gaps %d %s\n",
-			f.DeviceID, f.Missing, f.MissingList, f.Duplicates, f.DupList, f.LostReports, f.Error)
+		fmt.Fprintf(out, "  %s: missing %d %v, duplicates %d %v, beyond last seq %d, unrecorded gaps %d %s\n",
+			f.DeviceID, f.Missing, f.MissingList, f.Duplicates, f.DupList, f.Beyond, f.LostReports, f.Error)
 	}
 	if *jsonOut != "" {
 		b, err := json.MarshalIndent(rep, "", "  ")

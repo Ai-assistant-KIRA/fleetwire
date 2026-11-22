@@ -6,6 +6,8 @@
 // that forbids it were missing. Missing seqs are those from 1 to the
 // device's last seq that are neither stored nor inside a gap recorded on
 // the server. Every gap the device says it reported must also be covered.
+// A stored seq above the device's last seq fails the check too: the device
+// has lost the state that numbered it, and will reuse that seq.
 package checker
 
 import (
@@ -50,7 +52,7 @@ type DeviceReport struct {
 
 // OK reports whether the device kept the guarantee.
 func (d DeviceReport) OK() bool {
-	return d.Missing == 0 && d.Duplicates == 0 && d.LostReports == 0 && d.Error == ""
+	return d.Missing == 0 && d.Duplicates == 0 && d.Beyond == 0 && d.LostReports == 0 && d.Error == ""
 }
 
 // Report is the result for a run.
@@ -61,6 +63,7 @@ type Report struct {
 	Missing     uint64         `json:"missing"`
 	Duplicates  uint64         `json:"duplicates"`
 	GapSeqs     uint64         `json:"gap_seqs"`
+	Beyond      uint64         `json:"beyond_last_seq"`
 	LostReports uint64         `json:"unrecorded_gap_seqs"`
 	Errors      int            `json:"errors"`
 	Failed      []DeviceReport `json:"failed_devices,omitempty"`
@@ -68,7 +71,7 @@ type Report struct {
 
 // OK reports whether every device kept the guarantee.
 func (r Report) OK() bool {
-	return r.Missing == 0 && r.Duplicates == 0 && r.LostReports == 0 && r.Errors == 0
+	return r.Missing == 0 && r.Duplicates == 0 && r.Beyond == 0 && r.LostReports == 0 && r.Errors == 0
 }
 
 // Checker reads devices back.
@@ -108,6 +111,7 @@ func (c *Checker) Run(ctx context.Context, exps []Expectation) Report {
 		r.Missing += d.Missing
 		r.Duplicates += d.Duplicates
 		r.GapSeqs += d.GapSeqs
+		r.Beyond += d.Beyond
 		r.LostReports += d.LostReports
 		if d.Error != "" {
 			r.Errors++
