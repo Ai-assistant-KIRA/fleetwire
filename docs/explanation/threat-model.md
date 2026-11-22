@@ -37,7 +37,10 @@ flowchart LR
 
 In Compose, ingest and the API share the keyring directory on one host. In
 Kubernetes, ingest has no KEK and no root key: it wraps and unwraps data keys
-through the API's keyring listener (ADR-0012).
+through the API's keyring listener (ADR-0012). The services Juju creates for
+the broker and the API carry the internal listeners (8884, 8445) for the
+backend's own clients, so only separate services with the edge ports are
+exposed ([deploy guide](../how-to/deploy-with-juju.md)).
 
 ## STRIDE table
 

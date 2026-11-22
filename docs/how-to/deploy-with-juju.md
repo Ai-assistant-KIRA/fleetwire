@@ -161,17 +161,63 @@ The token is in the task's results, shown once; anyone with read access to
 this model's tasks can read it, as with any credential action. From here,
 [enroll a device](enroll-a-device.md) as with the Compose stack.
 
-Devices outside the cluster reach two ports: the broker's device listener
-(`mosquitto-k8s`, 8883) and the API's device listener (`fleetwire-api-k8s`,
-8444). The charms open them on their Kubernetes services; expose those with a
-LoadBalancer (for example `microk8s enable metallb`) or NodePort services,
-and use the external names in the certificates and in `device-broker-url` and
-`device-api-url`. For a quick test from the VM, port-forwards work:
+## 6. Expose the device and tenant ports
+
+Devices outside the cluster reach the broker's device listener (8883) and
+the API's device listener (8444); tenants and `fwctl` use the API's public
+listener (8443). Do not expose the Kubernetes services Juju creates for the
+applications. Ingest and the bridge reach internal listeners through them
+under the names in the certificates, so `mosquitto-k8s` also carries the
+broker's service listener (8884, no CRL check) and `fleetwire-api-k8s` the
+keyring listener (8445). Add separate services that select the same pods and
+list only the external ports. Save this as `external.yaml`:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleetwire-broker-external
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: mosquitto-k8s
+  ports:
+    - {name: mqtt-devices, port: 8883, targetPort: 8883}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleetwire-api-external
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: fleetwire-api-k8s
+  ports:
+    - {name: public, port: 8443, targetPort: 8443}
+    - {name: device, port: 8444, targetPort: 8444}
+```
+
+Give MetalLB a free address range on the VM's network, then apply it:
+
+```console
+$ microk8s enable metallb:<first-address>-<last-address>
+$ microk8s kubectl -n fleetwire apply -f external.yaml
+$ microk8s kubectl -n fleetwire get svc fleetwire-broker-external fleetwire-api-external
+```
+
+Without a load balancer, use `type: NodePort`. Put the external names in
+the certificates and in `device-broker-url` and `device-api-url`. For a
+quick test from the VM, port-forwards to the Juju services work, because
+they stay on the VM:
 
 ```console
 $ microk8s kubectl -n fleetwire port-forward svc/fleetwire-api-k8s 18444:8444 &
 $ microk8s kubectl -n fleetwire port-forward svc/mosquitto-k8s 18883:8883 &
 ```
+
+The admin listeners (9090: plain HTTP health and metrics) are on no
+service. Scrape them from the pods, for example by pod name through the
+headless `<application>-endpoints` service Juju creates.
 
 ## Limits of this deployment
 

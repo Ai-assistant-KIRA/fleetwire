@@ -236,7 +236,10 @@ class FleetwireIngestCharm(ops.CharmBase):
     # ---- reconcile ---------------------------------------------------------
 
     def _reconcile(self, event: ops.EventBase) -> None:
-        self.unit.set_ports(ADMIN_PORT)
+        # Nothing connects to ingest through its Kubernetes service. The
+        # admin listener (plain HTTP) stays off it: the checks use localhost,
+        # and metrics are scraped from the pod.
+        self.unit.set_ports()
         if isinstance(event, ops.RelationBrokenEvent):
             # Without one of its relations ingest cannot store or ack data
             # correctly; it stops until the relation is back.

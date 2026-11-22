@@ -248,7 +248,13 @@ class FleetwireApiCharm(ops.CharmBase):
             rel.data[self.app].pop("schema-ready", None)
 
     def _reconcile(self, _: ops.EventBase) -> None:
-        self.unit.set_ports(PUBLIC_PORT, DEVICE_PORT, INTERNAL_PORT, ADMIN_PORT)
+        # The ports on the application's Kubernetes service: ingest reaches
+        # the keyring listener through it under the name in the certificate,
+        # so it carries an internal port and must not be exposed as is (the
+        # deploy guide adds a separate service for 8443 and 8444). The admin
+        # listener is not on it: the checks use localhost, and metrics are
+        # scraped from the pod.
+        self.unit.set_ports(PUBLIC_PORT, DEVICE_PORT, INTERNAL_PORT)
         pki, owner, runtime = self._pki(), credentials(self.owner_db), credentials(self.runtime_db)
         if pki is None or self._pki_problem(pki) or owner is None or runtime is None:
             return

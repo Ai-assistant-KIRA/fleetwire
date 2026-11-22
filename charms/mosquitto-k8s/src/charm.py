@@ -223,6 +223,11 @@ class MosquittoCharm(ops.CharmBase):
         return listening(SERVICE_PORT) and listening(DEVICE_PORT)
 
     def _reconcile(self, _: ops.EventBase) -> None:
+        # The bridge and ingest reach the service listener through the
+        # application's Kubernetes service, under the name in the broker
+        # certificate. That service therefore carries 8884, which checks no
+        # CRL, and must not be exposed as is; the deploy guide adds a
+        # separate service for 8883.
         self.unit.set_ports(DEVICE_PORT, SERVICE_PORT)
         if self.unit.is_leader():
             for rel in self.model.relations["mqtt"]:

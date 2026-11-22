@@ -155,7 +155,10 @@ class FleetwireBridgeCharm(ops.CharmBase):
         return SERVICE in services and services[SERVICE].is_running() and readyz(ADMIN_PORT)
 
     def _reconcile(self, event: ops.EventBase) -> None:
-        self.unit.set_ports(ADMIN_PORT)
+        # Nothing connects to the bridge through its Kubernetes service. The
+        # admin listener (plain HTTP) stays off it: the checks use localhost,
+        # and metrics are scraped from the pod.
+        self.unit.set_ports()
         if isinstance(event, ops.RelationBrokenEvent):
             if self._container.can_connect() and SERVICE in self._container.get_plan().services:
                 self._container.stop(SERVICE)

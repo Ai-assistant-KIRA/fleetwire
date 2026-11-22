@@ -173,6 +173,12 @@ def test_leader_migrates_as_owner_and_the_service_runs_as_its_own_login(ctx):
     assert out.unit_status == testing.WaitingStatus("waiting for the API to become ready")
 
 
+def test_the_service_carries_the_api_listeners_but_not_the_admin_one(ctx):
+    out = ctx.run(ctx.on.config_changed(), state(pki_secret()))
+    # 8445 stays: ingest reaches the keyring listener through the service.
+    assert {p.port for p in out.opened_ports} == {8443, 8444, 8445}
+
+
 def test_requests_the_runtime_login_with_the_charmed_dml_role(ctx):
     rt = runtime_db({})
     out = ctx.run(ctx.on.relation_created(rt), state(pki_secret(), relations=[owner_db({}), rt]))

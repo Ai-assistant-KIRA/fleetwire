@@ -90,6 +90,12 @@ def test_starts_with_kafka_and_the_broker(ctx):
     assert out.unit_status == testing.WaitingStatus("waiting for the bridge to become ready")
 
 
+def test_opens_no_port_on_the_service(ctx):
+    st = dataclasses.replace(setup(), opened_ports=[testing.TCPPort(9090)])
+    out = ctx.run(ctx.on.config_changed(), st)
+    assert not out.opened_ports
+
+
 def test_active_when_the_bridge_reports_ready(ctx, monkeypatch):
     monkeypatch.setattr(charm, "readyz", lambda port: True)
     out = ctx.run(ctx.on.config_changed(), setup())

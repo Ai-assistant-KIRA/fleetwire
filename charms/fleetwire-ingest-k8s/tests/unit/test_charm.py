@@ -124,6 +124,12 @@ def test_starts_with_its_database_login_kafka_keyring_and_broker(ctx):
     assert out.unit_status == testing.WaitingStatus("waiting for ingest to become ready")
 
 
+def test_opens_no_port_on_the_service(ctx):
+    st = dataclasses.replace(setup(), opened_ports=[testing.TCPPort(9090)])
+    out = ctx.run(ctx.on.config_changed(), st)
+    assert not out.opened_ports
+
+
 def test_leader_creates_the_topics_once(ctx):
     first = ctx.run(ctx.on.config_changed(), setup())
     calls = ctx.exec_history[CONTAINER]

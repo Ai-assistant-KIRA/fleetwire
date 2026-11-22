@@ -154,6 +154,8 @@ def test_publishes_the_service_listener_to_clients(ctx, root, api):
     out = ctx.run(ctx.on.config_changed(), setup(root))
     mqtt = next(r for r in out.relations if r.endpoint == "mqtt")
     assert mqtt.local_app_data["service-url"] == "tls://mosquitto-k8s.test.svc.cluster.local:8884"
+    # The bridge and ingest reach that address through the Kubernetes service.
+    assert {p.port for p in out.opened_ports} == {8883, 8884}
 
 
 def test_does_not_start_without_a_crl(ctx, root, api):
