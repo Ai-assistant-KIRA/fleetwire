@@ -71,16 +71,26 @@ search() {
   echo "|---:|---:|---:|---:|---:|---:|---:|---|"
   for step in "${steps[@]}"; do
     devices=${step%x*} readings=${step#*x}
+    # A non-zero exit is a crash, a bad flag, or (since the load generator
+    # checks it) a device that did not start: the step did not offer the
+    # load it names, whatever Prometheus shows.
+    rc=0
     FLEETWIRE_TENANT_TOKEN=$(cat "$state/tenant-token") bin/fleetwire-loadgen run \
       -devices "$devices" -state-dir "$state/devices" -interval 1s -readings "$readings" \
       -duration "${step_s}s" -drain-timeout 1s -metrics-listen 172.31.250.1:9466 \
-      > "$state/loadgen-$step.log" 2>&1 || true
+      > "$state/loadgen-$step.log" 2>&1 || rc=$?
     offered=$(q 'sum(rate(fleetwire_agent_readings_collected_total[2m]))')
     stored=$(q 'sum(rate(fleetwire_ingest_readings_stored_total[2m]))')
     lag=$(q 'sum(fleetwire_ingest_consumer_lag)')
     slope=$(q 'deriv(sum(fleetwire_ingest_consumer_lag)[2m:10s])')
     p99=$(q 'histogram_quantile(0.99, sum(rate(fleetwire_ingest_e2e_delay_seconds_bucket[2m])) by (le))')
-    kept=$(awk -v s="$slope" -v st="$stored" -v o="$offered" 'BEGIN { print (st >= 0.95 * o && s <= 1) ? "yes" : "no" }')
+    if [ "$rc" -ne 0 ]; then
+      kept="no: load generator exited $rc, see $state/loadgen-$step.log"
+    else
+      # No offered load ("nan" or 0) is not keeping up: 0 >= 0.95 * 0.
+      kept=$(awk -v s="$slope" -v st="$stored" -v o="$offered" \
+        'BEGIN { print (o + 0 > 0 && st + 0 >= 0.95 * (o + 0) && s + 0 <= 1) ? "yes" : "no" }')
+    fi
     printf '| %d | %d | %.0f | %.0f | %.0f | %.1f | %.2f s | %s |\n' \
       "$devices" "$devices" "$offered" "$stored" "$lag" "$slope" "$p99" "$kept"
     # Let ingest drain before the next step, so steps do not overlap.
@@ -94,3 +104,5 @@ search() {
 mkdir -p "$(dirname "$out")"
 search | tee "$out"
 echo "written to $out" >&2
+# The table keeps every step; the run fails if a load generator did.
+if grep -q 'load generator exited' "$out"; then exit 1; fi
