@@ -1,0 +1,6 @@
+# Device listener (8883). The username is the certificate CN, which the API
+# sets to the server-generated device UUID (ADR-0009). Only pattern rules:
+# whatever its CN, a client here can publish its own uplink and read its
+# own acks, nothing else.
+pattern write fw/v1/d/%u/up
+pattern read fw/v1/d/%u/ack

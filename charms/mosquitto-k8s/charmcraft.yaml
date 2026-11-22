@@ -5,8 +5,9 @@ summary: Eclipse Mosquitto with the two mutual-TLS listeners and the ACLs fleetw
 description: |
   Runs Eclipse Mosquitto in a Pebble-managed container with two listeners:
   8883 for devices (device CA chain, CRL checked) and 8884 for the fleetwire
-  services (service CA chain). Usernames are certificate common names and
-  the ACL pins every device to its own topics.
+  services (service CA chain). Usernames are certificate common names. Each
+  listener has its own ACL: on 8883 a client reaches only its own device
+  topics, and on 8884 only fleetwire-bridge and fleetwire-ingest have rights.
 
   The device CRL comes from fleetwire-api-k8s over fleetwire_crl. The charm
   fetches it on every update-status hook and when the relation changes, and

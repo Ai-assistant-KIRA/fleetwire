@@ -102,13 +102,50 @@ def test_renders_both_listeners_and_starts(ctx, root, api):
     assert "listener 8883" in conf
     assert "crlfile /mosquitto/crl/crl.pem" in conf
     assert "listener 8884" in conf
-    assert "pattern write fw/v1/d/%u/up" in (root / "config/acl").read_text()
+    assert (root / "config/acl-devices").read_text() == charm.DEVICE_ACL
+    assert (root / "config/acl-services").read_text() == charm.SERVICE_ACL
     assert (root / "certs/mosquitto.key").read_text() == "BROKER KEY"
     assert (root / "crl/crl.pem").read_bytes() == CRL_V1
     # The CRL is fetched over TLS verified against the bundle from the secret.
     assert api.calls == [(CRL_URL, "CA BUNDLE")]
     assert SERVICE in out.get_container(CONTAINER).plan.services
     assert out.unit_status == testing.WaitingStatus("waiting for Mosquitto to listen")
+
+
+def listener_sections(conf: str) -> dict[str, list[str]]:
+    """The options of each listener block, by port; "global" holds the rest."""
+    sections: dict[str, list[str]] = {"global": []}
+    current = "global"
+    for line in conf.splitlines():
+        if line.startswith("listener "):
+            current = line.split()[1]
+            sections[current] = []
+        elif line.strip():
+            sections[current].append(line)
+    return sections
+
+
+def test_each_listener_has_its_own_acl():
+    sections = listener_sections(render_config(1000000))
+    # Mosquitto refuses per_listener_settings after any security option.
+    assert sections["global"][0] == "per_listener_settings true"
+    assert not any(o.startswith(("acl_file", "allow_anonymous")) for o in sections["global"])
+    assert "acl_file /mosquitto/config/acl-devices" in sections["8883"]
+    assert "crlfile /mosquitto/crl/crl.pem" in sections["8883"]
+    assert "acl_file /mosquitto/config/acl-services" in sections["8884"]
+    for port in ("8883", "8884"):
+        assert "listener_allow_anonymous false" in sections[port]
+        assert "require_certificate true" in sections[port]
+        assert "use_identity_as_username true" in sections[port]
+
+
+def test_devices_get_pattern_rules_only_and_services_only_their_own():
+    # A device certificate with a service CN must get no service rights on
+    # 8883, and a device certificate on 8884 must get nothing.
+    assert all(line.startswith("pattern ") for line in charm.DEVICE_ACL.splitlines())
+    users = [line.split()[1] for line in charm.SERVICE_ACL.splitlines() if line.startswith("user ")]
+    assert users == ["fleetwire-bridge", "fleetwire-ingest"]
+    assert "pattern" not in charm.SERVICE_ACL
 
 
 def test_publishes_the_service_listener_to_clients(ctx, root, api):

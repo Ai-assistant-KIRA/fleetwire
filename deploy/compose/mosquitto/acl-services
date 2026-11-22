@@ -1,0 +1,7 @@
+# Service listener (8884), internal network only. The username is the
+# certificate CN; only the bridge and ingest have rights here, and a device
+# certificate that reaches this listener can do nothing.
+user fleetwire-bridge
+topic read fw/v1/d/+/up
+user fleetwire-ingest
+topic write fw/v1/d/+/ack

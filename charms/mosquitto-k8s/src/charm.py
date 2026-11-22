@@ -42,28 +42,36 @@ PKI_FILES = {
 }
 CRL_PEM_HEADER = b"-----BEGIN X509 CRL-----"
 
-# Devices: the username is the certificate CN, which the API sets to the
-# server-generated device UUID, so a device reaches only its own topics.
-ACL = """\
+# Each listener has its own ACL. On the device listener the username is the
+# certificate CN, which the API sets to the server-generated device UUID, and
+# only pattern rules apply: a certificate from the online device CA that
+# carries a service CN still reaches only "its own" device topics.
+DEVICE_ACL = """\
 pattern write fw/v1/d/%u/up
 pattern read fw/v1/d/%u/ack
+"""
+# On the service listener only the bridge and ingest have rights; a device
+# certificate that reaches it can do nothing.
+SERVICE_ACL = """\
 user fleetwire-bridge
 topic read fw/v1/d/+/up
 user fleetwire-ingest
 topic write fw/v1/d/+/ack
 """
+ACL_FILES = {"acl-devices": DEVICE_ACL, "acl-services": SERVICE_ACL}
 
 
 def render_config(max_queued_messages: int) -> str:
     """mosquitto.conf with the device and service listeners.
 
     Two listeners, because OpenSSL checks only the CRL of the leaf's issuer:
-    devices and services have different issuing CAs.
+    devices and services have different issuing CAs. per_listener_settings
+    gives each its own ACL; Mosquitto 2.1 deprecates the option (removal is
+    planned for 3.0) but has no other way to do that, and it must come before
+    the other security settings.
     """
     return f"""\
-per_listener_settings false
-allow_anonymous false
-acl_file {CONF_DIR}/acl
+per_listener_settings true
 persistence true
 persistence_location {DATA}/
 autosave_interval 10
@@ -82,6 +90,8 @@ connection_messages false
 listener {DEVICE_PORT}
 protocol mqtt
 max_connections -1
+listener_allow_anonymous false
+acl_file {CONF_DIR}/acl-devices
 cafile {CERTS}/device-trust.pem
 certfile {CERTS}/mosquitto.pem
 keyfile {CERTS}/mosquitto.key
@@ -92,6 +102,8 @@ tls_version tlsv1.2
 
 listener {SERVICE_PORT}
 protocol mqtt
+listener_allow_anonymous false
+acl_file {CONF_DIR}/acl-services
 cafile {CERTS}/service-trust.pem
 certfile {CERTS}/mosquitto.pem
 keyfile {CERTS}/mosquitto.key
@@ -219,7 +231,8 @@ class MosquittoCharm(ops.CharmBase):
         own = {"user_id": MOSQUITTO_UID, "group_id": MOSQUITTO_UID, "make_dirs": True}
         conf = render_config(max_queued)
         c.push(f"{CONF_DIR}/mosquitto.conf", conf, permissions=0o644, **own)
-        c.push(f"{CONF_DIR}/acl", ACL, permissions=0o644, **own)
+        for name, acl in ACL_FILES.items():
+            c.push(f"{CONF_DIR}/{name}", acl, permissions=0o644, **own)
         for key, name in PKI_FILES.items():
             c.push(f"{CERTS}/{name}", pki[key], permissions=0o600, **own)
         c.make_dir(DATA, make_parents=True, permissions=0o700, user_id=MOSQUITTO_UID, group_id=MOSQUITTO_UID)
@@ -228,7 +241,8 @@ class MosquittoCharm(ops.CharmBase):
             return  # Mosquitto refuses to start without its crlfile.
         # The hash makes a changed configuration or certificate change the
         # layer, so replan restarts Mosquitto; a new CRL needs only SIGHUP.
-        digest = hashlib.sha256((conf + ACL + "".join(pki[k] for k in sorted(PKI_FILES))).encode()).hexdigest()
+        parts = [conf, *ACL_FILES.values(), *(pki[k] for k in sorted(PKI_FILES))]
+        digest = hashlib.sha256("".join(parts).encode()).hexdigest()
         layer: ops.pebble.LayerDict = {
             "summary": "mosquitto",
             "services": {

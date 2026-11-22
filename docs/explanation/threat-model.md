@@ -44,7 +44,7 @@ through the API's keyring listener (ADR-0012).
 | # | Category | Threat | Handling |
 |---|---|---|---|
 | S1 | Spoofing | A device claims another device's ID | Device IDs are server-generated UUIDs in the CN and a URI SAN; the CSR subject is ignored (ADR-0009). The ACL pins topics to the CN. |
-| S2 | Spoofing | A device claims a service name (`fleetwire-ingest`) to publish acks | CNs are always UUIDs for device certificates; services use certificates from a separate service CA on a listener devices cannot reach. |
+| S2 | Spoofing | A device claims a service name (`fleetwire-ingest`) to publish acks | The API gives device certificates UUID CNs only; services use certificates from a separate service CA on a listener devices cannot reach. Each Mosquitto listener has its own ACL: the device listener (8883) has only the per-device pattern rules, so a device CA certificate with a service CN gets device rights there and nothing more, and on the service listener (8884) only `fleetwire-bridge` and `fleetwire-ingest` have rights. The service listener trusts the root CA, so such a certificate would get service rights on 8884: keep 8884 on the internal network. |
 | S3 | Spoofing | A device claims another tenant | The tenant comes only from the device registry, never from the payload. |
 | S4 | Spoofing | Stolen device key used elsewhere | Revoke the device: ingest drops its data from the commit on, and the broker refuses it after the CRL reload (ADR-0010). Certificates expire after 30 days. |
 | S5 | Spoofing | Leaked API or operator token | Only SHA-256 hashes are stored; tokens are scoped, revocable, show `last_used_at`, and carry prefixes (`fwt_`, `fwo_`, `fwe_`) that secret scanners recognise. |
