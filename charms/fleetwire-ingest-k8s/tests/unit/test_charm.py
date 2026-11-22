@@ -204,6 +204,21 @@ def test_an_unchanged_secret_keeps_ingest_running(ctx):
     assert out.get_container(CONTAINER).plan == running.get_container(CONTAINER).plan
 
 
+@pytest.mark.parametrize(("workers", "conns"), [(None, "20"), (64, "68"), (1, "5")])
+def test_the_connection_pool_follows_the_workers(ctx, workers, conns):
+    config = {} if workers is None else {"workers": workers}
+    env = env_of(ctx.run(ctx.on.config_changed(), setup(config=config)))
+    assert env["FLEETWIRE_INGEST_WORKERS"] == str(workers or 16)
+    assert env["FLEETWIRE_DATABASE_MAX_CONNS"] == conns
+
+
+def test_no_workers_is_refused(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup(config={"workers": 0}))
+    assert out.unit_status == testing.BlockedStatus("workers must be at least 1, not 0")
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
+    assert not ctx.exec_history.get(CONTAINER)
+
+
 def test_kafka_tls_uses_the_relation_ca(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(kafka={**KAFKA, "tls": "enabled", "tls-ca": "KAFKA CA"}))
     env = env_of(out)

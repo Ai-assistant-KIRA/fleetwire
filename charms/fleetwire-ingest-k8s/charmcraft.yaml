@@ -70,7 +70,10 @@ config:
     workers:
       type: int
       default: 16
-      description: Devices processed in parallel per unit, one database transaction each.
+      description: |
+        Devices processed in parallel per unit, one database transaction
+        each. Each unit opens up to workers + 4 database connections; keep
+        PostgreSQL's max_connections above the sum over all units and the API.
     log-level:
       type: string
       default: info

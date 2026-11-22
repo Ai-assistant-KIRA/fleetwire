@@ -39,6 +39,10 @@ RUNTIME_ROLE = "charmed_dml"
 TOPICS = "fleetwire.*"
 GROUP_PREFIX = "fleetwire-"
 PKI_FILES = {"tls-cert": "ingest.pem", "tls-key": "ingest.key", "ca-bundle": "ca-bundle.pem"}
+# Database connections beyond one per worker, for tenant key and device
+# lookups in their own transactions and the readiness probe. 16 workers get
+# 20, the binary's default.
+SPARE_CONNS = 4
 
 
 def readyz(port: int) -> bool:
@@ -188,6 +192,8 @@ class FleetwireIngestCharm(ops.CharmBase):
             )
         elif missing := sorted(k for k in PKI_FILES if not pki.get(k)):
             event.add_status(ops.BlockedStatus("pki-secret lacks " + ", ".join(missing)))
+        if (workers := int(self.config["workers"])) < 1:
+            event.add_status(ops.BlockedStatus(f"workers must be at least 1, not {workers}"))
         for endpoint, other, ready, waiting in (
             ("database", "postgresql-k8s", self._database, "waiting for database relation data"),
             ("kafka", "kafka-k8s", self._kafka, "waiting for kafka relation data"),
@@ -225,7 +231,7 @@ class FleetwireIngestCharm(ops.CharmBase):
             return
         pki, kafka, db = self._pki(), self._kafka(), self._database()
         keyring, mqtt = self._keyring_url(), self._mqtt_url()
-        if pki is None or any(not pki.get(k) for k in PKI_FILES):
+        if pki is None or any(not pki.get(k) for k in PKI_FILES) or int(self.config["workers"]) < 1:
             return
         if kafka is None or db is None or keyring is None or mqtt is None or not self._container.can_connect():
             return
@@ -267,6 +273,9 @@ class FleetwireIngestCharm(ops.CharmBase):
             "FLEETWIRE_KAFKA_GROUP": kafka.group_prefix + "ingest",
             "FLEETWIRE_KAFKA_REPLICATION": str(self.config["kafka-replication"]),
             "FLEETWIRE_INGEST_WORKERS": str(self.config["workers"]),
+            # Each worker holds a connection for its transaction; a smaller
+            # pool would leave workers waiting for one.
+            "FLEETWIRE_DATABASE_MAX_CONNS": str(int(self.config["workers"]) + SPARE_CONNS),
             "FLEETWIRE_MQTT_URL": mqtt,
             "FLEETWIRE_MQTT_CERT_FILE": f"{PKI}/ingest.pem",
             "FLEETWIRE_MQTT_KEY_FILE": f"{PKI}/ingest.key",
