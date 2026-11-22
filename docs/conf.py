@@ -16,3 +16,5 @@ html_title = "fleetwire"
 
 # The guides' example and local addresses are not reachable from CI.
 linkcheck_ignore = [r"http://localhost.*", r"https://localhost.*", r"https://api\.example.*"]
+# sphinxcontrib-mermaid 2 draws every diagram 500 px high unless told otherwise.
+mermaid_height = "auto"
