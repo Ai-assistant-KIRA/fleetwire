@@ -289,6 +289,25 @@ def test_losing_kafka_stops_ingest(ctx):
     assert out.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.INACTIVE
 
 
+def with_api(st: testing.State, data: dict[str, str]) -> tuple[testing.Relation, testing.State]:
+    api = next(r for r in st.relations if r.endpoint == "api")
+    api = dataclasses.replace(api, remote_app_data=data)
+    return api, dataclasses.replace(st, relations=[api, *(r for r in st.relations if r.endpoint != "api")])
+
+
+def test_ingest_stops_while_the_api_has_migrations_due_and_starts_after(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    api, st = with_api(running, {"keyring-url": API["keyring-url"]})
+    paused = ctx.run(ctx.on.relation_changed(api), st)
+    assert paused.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.INACTIVE
+    assert paused.unit_status == testing.WaitingStatus("waiting for the API to migrate the database")
+    # Stopping again on the next hook is not an error.
+    ctx.run(ctx.on.update_status(), paused)
+    api, st = with_api(paused, API)
+    out = ctx.run(ctx.on.relation_changed(api), st)
+    assert out.get_container(CONTAINER).service_statuses[SERVICE] == ops.pebble.ServiceStatus.ACTIVE
+
+
 def test_database_tls_is_verified_when_postgresql_offers_it(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(db={**DB, "tls": "True", "tls-ca": "PG CA"}))
     assert env_of(out)["FLEETWIRE_DATABASE_URL"].endswith(

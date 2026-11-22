@@ -226,14 +226,20 @@ class FleetwireIngestCharm(ops.CharmBase):
         if isinstance(event, ops.RelationBrokenEvent):
             # Without one of its relations ingest cannot store or ack data
             # correctly; it stops until the relation is back.
-            if self._container.can_connect() and SERVICE in self._container.get_plan().services:
-                self._container.stop(SERVICE)
+            self._stop()
             return
         pki, kafka, db = self._pki(), self._kafka(), self._database()
         keyring, mqtt = self._keyring_url(), self._mqtt_url()
+        if keyring is None:
+            # The API withdraws schema-ready when migrations are due again: a
+            # new image or a new owner relation. Until they have run, the
+            # schema may not be the one this ingest expects. Batches wait in
+            # Kafka meanwhile.
+            self._stop()
+            return
         if pki is None or any(not pki.get(k) for k in PKI_FILES) or int(self.config["workers"]) < 1:
             return
-        if kafka is None or db is None or keyring is None or mqtt is None or not self._container.can_connect():
+        if kafka is None or db is None or mqtt is None or not self._container.can_connect():
             return
         digest = self._write_files(pki, kafka, db)
         env = self._environment(kafka, db, keyring, mqtt)
@@ -248,6 +254,13 @@ class FleetwireIngestCharm(ops.CharmBase):
         env["FLEETWIRE_CONFIG_SHA256"] = digest
         self._container.add_layer(SERVICE, self._layer(env), combine=True)
         self._container.replan()
+
+    def _stop(self) -> None:
+        if not self._container.can_connect():
+            return
+        services = self._container.get_services(SERVICE)
+        if SERVICE in services and services[SERVICE].is_running():
+            self._container.stop(SERVICE)
 
     def _write_files(self, pki: dict[str, str], kafka: Kafka, db: Database) -> str:
         """Writes the service's files and returns their digest."""

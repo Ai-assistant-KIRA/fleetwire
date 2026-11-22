@@ -141,7 +141,9 @@ The API leader runs the database migrations with the owner's login (its
 `database` relation). The API service and ingest log in with their own
 relation users, requested with the extra user role `charmed_dml`, which stay
 inside row-level security and cannot switch to the owner. Ingest waits until
-the API reports over the `ingest` relation that the schema exists.
+the API reports over the `ingest` relation that the schema exists, and stops
+while the API has migrations due again (after an upgrade or a new `database`
+relation); batches wait in Kafka meanwhile.
 
 Give fleetwire a PostgreSQL of its own: `charmed_dml` reads and writes every
 database of the cluster that its members can connect to, so on a shared
