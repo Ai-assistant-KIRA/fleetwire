@@ -75,17 +75,46 @@ groups:
 
   - name: fleetwire-symptoms
     rules:
+      # fleetwire_crl_age_seconds is the time since this API process last
+      # published the CRL. Until its first publish it reports about 9.2e9 s
+      # (math.MaxInt64 ns), so a value of 1e9 s (31 years) or more means
+      # "not published since it started", not a real age.
       - alert: FleetwireCRLStale
         # OpenSSL rejects every device once nextUpdate (7 days) passes.
-        expr: min(fleetwire_crl_age_seconds) > 48 * 3600
+        # Either the freshest replica that has published did so over 48 h
+        # ago, or no replica has published since it started and every one
+        # has been up for over 48 h. A replica that has just started counts
+        # only through its uptime, so a restart neither pages (the boot
+        # value) nor hides an old CRL that another replica failed to renew.
+        expr: >-
+          min(fleetwire_crl_age_seconds < 1e9) > 48 * 3600
+          or
+          (
+            min((time() - process_start_time_seconds) and (fleetwire_crl_age_seconds >= 1e9)) > 48 * 3600
+            unless on () (fleetwire_crl_age_seconds < 1e9)
+          )
+        for: 5m
         labels: {severity: page}
         annotations:
           summary: No API replica has published the device CRL for 48 h; the broker will reject all devices when it expires.
+      - alert: FleetwireCRLNotPublished
+        # The publisher tries at start and then every minute; a quarter of
+        # an hour without success is a broken database, CA key or CRL path.
+        expr: fleetwire_crl_age_seconds >= 1e9
+        for: 15m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $labels.instance }} has not published the device CRL since it started; its log has the publisher's error."
       - alert: FleetwireBridgeNotProducing
-        expr: (time() - max(fleetwire_bridge_last_produce_timestamp_seconds)) > 120 and sum(fleetwire_bridge_pending_acks) > 0
+        # Per replica: a replica wedged with messages waiting is not hidden
+        # by another one that still produces. The timestamp starts at the
+        # process start time, and the `for` lets an idle replica's first
+        # messages after a quiet spell reach Kafka before anything fires.
+        expr: (time() - fleetwire_bridge_last_produce_timestamp_seconds) > 120 and fleetwire_bridge_pending_acks > 0
+        for: 2m
         labels: {severity: page}
         annotations:
-          summary: Messages wait for Kafka and no write has been confirmed for 2 minutes.
+          summary: "{{ $labels.instance }}: messages wait for Kafka and no write has been confirmed for over 2 minutes."
       - alert: FleetwireConsumerLagGrowing
         expr: sum(fleetwire_ingest_consumer_lag) > 1000 and deriv(sum(fleetwire_ingest_consumer_lag)[10m:1m]) > 0
         for: 10m

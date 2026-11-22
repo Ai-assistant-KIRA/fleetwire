@@ -64,6 +64,8 @@ tests:
         alertname: FleetwireDeadLetterBudgetBurnFast
         exp_alerts: []
 
+  # The CRL was last published 47 h 46 min ago and the API keeps failing:
+  # the age passes 48 h at 14m and the alert fires 5 minutes later.
   - interval: 1m
     input_series:
       - series: 'fleetwire_crl_age_seconds{instance="api:9090"}'
@@ -72,13 +74,176 @@ tests:
       - eval_time: 10m
         alertname: FleetwireCRLStale
         exp_alerts: []
+      - eval_time: 18m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
       - eval_time: 50m
         alertname: FleetwireCRLStale
         exp_alerts:
           - exp_labels: {severity: page}
             exp_annotations:
               summary: No API replica has published the device CRL for 48 h; the broker will reject all devices when it expires.
-
+  # Boot: until its first publish the API reports math.MaxInt64 ns (about
+  # 9.2e9 s). Here the database is ready after 3 minutes. Neither CRL alert
+  # fires (the old rule paged at once).
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '9.223372036854776e9x3 0+60x30'
+      - series: 'process_start_time_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '0x34'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: FleetwireCRLNotPublished
+        exp_alerts: []
+  # The API cannot publish after it starts. After 15 minutes that is a
+  # ticket. It does not page: the CRL the previous process published may
+  # still be fresh.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '9.223372036854776e9x40'
+      - series: 'process_start_time_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FleetwireCRLNotPublished
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: FleetwireCRLNotPublished
+        exp_alerts:
+          - exp_labels: {severity: ticket, instance: "api:9090", job: fleetwire-api}
+            exp_annotations:
+              summary: "api:9090 has not published the device CRL since it started; its log has the publisher's error."
+      - eval_time: 40m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+  # The API has run for 48 h without publishing once: the CRL is at least
+  # that old, so it pages.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '9.223372036854776e9x2900'
+      - series: 'process_start_time_seconds{instance="api:9090",job="fleetwire-api"}'
+        values: '0x2900'
+    alert_rule_test:
+      - eval_time: 48h5m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 48h6m
+        alertname: FleetwireCRLStale
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No API replica has published the device CRL for 48 h; the broker will reject all devices when it expires.
+  # Two replicas. api-1 last published 49 h ago and keeps failing; api-2
+  # has just restarted and not published yet. api-2's short uptime must not
+  # hide api-1's old CRL.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api-1:9090",job="fleetwire-api"}'
+        values: '176400+60x20'
+      - series: 'process_start_time_seconds{instance="api-1:9090",job="fleetwire-api"}'
+        values: '-500000x20'
+      - series: 'fleetwire_crl_age_seconds{instance="api-2:9090",job="fleetwire-api"}'
+        values: '9.223372036854776e9x20'
+      - series: 'process_start_time_seconds{instance="api-2:9090",job="fleetwire-api"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: FleetwireCRLStale
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: No API replica has published the device CRL for 48 h; the broker will reject all devices when it expires.
+  # Two replicas. api-1 publishes; api-2 started 49 h before the test
+  # window (a negative start time) and has never published. The CRL is
+  # fresh, so only api-2's ticket fires.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_crl_age_seconds{instance="api-1:9090",job="fleetwire-api"}'
+        values: '0+60x30'
+      - series: 'process_start_time_seconds{instance="api-1:9090",job="fleetwire-api"}'
+        values: '0x30'
+      - series: 'fleetwire_crl_age_seconds{instance="api-2:9090",job="fleetwire-api"}'
+        values: '9.223372036854776e9x30'
+      - series: 'process_start_time_seconds{instance="api-2:9090",job="fleetwire-api"}'
+        values: '-176400x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: FleetwireCRLStale
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: FleetwireCRLNotPublished
+        exp_alerts:
+          - exp_labels: {severity: ticket, instance: "api-2:9090", job: fleetwire-api}
+            exp_annotations:
+              summary: "api-2:9090 has not published the device CRL since it started; its log has the publisher's error."
+  # bridge-1 wedges at 10m with 1,000 messages waiting while bridge-2 keeps
+  # producing. The alert names bridge-1: its last write is over 120 s old
+  # from 13m, and 2 minutes later it fires. (The old rule took max() of the
+  # timestamps across replicas, so bridge-2 hid it.)
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_bridge_last_produce_timestamp_seconds{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '0+60x10 600x30'
+      - series: 'fleetwire_bridge_pending_acks{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '0x10 1000x30'
+      - series: 'fleetwire_bridge_last_produce_timestamp_seconds{instance="bridge-2:9090",job="fleetwire-bridge"}'
+        values: '0+60x40'
+      - series: 'fleetwire_bridge_pending_acks{instance="bridge-2:9090",job="fleetwire-bridge"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts:
+          - exp_labels: {severity: page, instance: "bridge-1:9090", job: fleetwire-bridge}
+            exp_annotations:
+              summary: "bridge-1:9090: messages wait for Kafka and no write has been confirmed for over 2 minutes."
+  # Cold start: the bridge starts at 60m, and Kafka accepts its first write
+  # only at 64m. The timestamp starts at the process start time, so the
+  # write is over 120 s old just once (63m) and nothing fires. (With the
+  # old 0 start value and no `for`, this paged at 60m.)
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_bridge_last_produce_timestamp_seconds{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '_x60 3600x3 3840+60x10'
+      - series: 'fleetwire_bridge_pending_acks{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '_x60 20x3 0x10'
+    alert_rule_test:
+      - eval_time: 63m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
+      - eval_time: 66m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
+  # Idle: no message between 5m and 30m, so the last write is 25 minutes
+  # old when a message arrives; Kafka confirms it within the minute.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_bridge_last_produce_timestamp_seconds{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '0+60x5 300x24 1860+60x10'
+      - series: 'fleetwire_bridge_pending_acks{instance="bridge-1:9090",job="fleetwire-bridge"}'
+        values: '0x29 40 0x10'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
+      - eval_time: 33m
+        alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
   - interval: 1m
     input_series:
       - series: 'fleetwire_ingest_exclusion_violations_total{instance="ingest-1:9090"}'

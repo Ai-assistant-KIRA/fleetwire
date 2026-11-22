@@ -34,14 +34,19 @@ The short window makes an alert stop soon after the problem ends.
 
 Symptom alerts without an SLO:
 
-- `FleetwireCRLStale`: no CRL published for 48 h (the broker rejects every
-  device when the 7-day CRL expires).
-- `FleetwireBridgeNotProducing`: messages wait and no Kafka write has been
-  confirmed for 2 minutes.
-- `FleetwireConsumerLagGrowing`: lag above 1,000 and still growing for 10
-  minutes.
-- `FleetwireExclusionViolation`: the database rejected an overlapping chunk;
-  this must never happen.
+- `FleetwireCRLStale` (page): no CRL published for 48 h (the broker rejects
+  every device when the 7-day CRL expires). An API process reports a huge
+  age until its first publish; the rule counts such a replica by its uptime
+  instead, so a restart does not page.
+- `FleetwireCRLNotPublished` (ticket): an API replica has not published the
+  CRL in the 15 minutes since it started.
+- `FleetwireBridgeNotProducing` (page): on one bridge replica, messages wait
+  and the last confirmed Kafka write is over 2 minutes old, and this has
+  lasted 2 minutes.
+- `FleetwireConsumerLagGrowing` (ticket): lag above 1,000 and still growing
+  for 10 minutes.
+- `FleetwireExclusionViolation` (page): the database rejected an overlapping
+  chunk; this must never happen.
 
 `make rules-test` checks the rules with `promtool check rules` and runs the
 unit tests in `deploy/prometheus/tests/`.
