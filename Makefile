@@ -67,6 +67,10 @@ vuln: ## Scan dependencies for known vulnerabilities
 rules-test: ## Check the Prometheus rules and run their unit tests
 	promtool check rules deploy/prometheus/rules/*.yml
 	promtool test rules deploy/prometheus/tests/*.yml
+	@# Every alert needs at least one unit test.
+	@for a in $$(sed -n 's/^ *- alert: *//p' deploy/prometheus/rules/*.yml); do \
+	  grep -q "alertname: $$a\$$" deploy/prometheus/tests/*.yml || { echo "no unit test for alert $$a"; exit 1; }; \
+	done
 
 .PHONY: shellcheck
 shellcheck: ## Check every shell script, including the snap hook, with shellcheck

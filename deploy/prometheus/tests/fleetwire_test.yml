@@ -64,6 +64,69 @@ tests:
         alertname: FleetwireDeadLetterBudgetBurnFast
         exp_alerts: []
 
+  # 10% of readings late for 6 h: above the slow (6%) threshold, below the
+  # fast (14.4%) one.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_e2e_delay_seconds_bucket{le="5.0"}'
+        values: '0+90x400'
+      - series: 'fleetwire_ingest_e2e_delay_seconds_count'
+        values: '0+100x400'
+    alert_rule_test:
+      - eval_time: 6h10m
+        alertname: FleetwireFreshnessBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: freshness}
+            exp_annotations:
+              summary: Readings are reaching storage too late; the freshness budget burns 6x too fast.
+      - eval_time: 6h10m
+        alertname: FleetwireFreshnessBudgetBurnFast
+        exp_alerts: []
+  # One batch in a hundred dead-lettered: 100x the budget, so it pages.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_batches_total{result="dlq"}'
+        values: '0+1x90'
+      - series: 'fleetwire_ingest_batches_total{result="stored"}'
+        values: '0+99x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: FleetwireDeadLetterBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: correctness}
+            exp_annotations:
+              summary: Batches are going to the dead-letter topic; check its fw-dlq-reason headers.
+  # 5% of API requests fail: above the fast threshold (1.44%).
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_api_requests_total{listener="public",route="GET /v1/devices",code="500"}'
+        values: '0+5x90'
+      - series: 'fleetwire_api_requests_total{listener="public",route="GET /v1/devices",code="200"}'
+        values: '0+95x90'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: FleetwireAPIBudgetBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: availability}
+            exp_annotations:
+              summary: The API answers with 5xx; the availability budget burns 14.4x too fast.
+  # 1% of API requests fail for 6 h: a ticket, not a page.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_api_requests_total{listener="public",route="GET /v1/devices",code="503"}'
+        values: '0+1x400'
+      - series: 'fleetwire_api_requests_total{listener="public",route="GET /v1/devices",code="200"}'
+        values: '0+99x400'
+    alert_rule_test:
+      - eval_time: 6h10m
+        alertname: FleetwireAPIBudgetBurnSlow
+        exp_alerts:
+          - exp_labels: {severity: ticket, slo: availability}
+            exp_annotations:
+              summary: The API answers with 5xx at a rate that will exhaust the budget.
+      - eval_time: 6h10m
+        alertname: FleetwireAPIBudgetBurnFast
+        exp_alerts: []
   # The CRL was last published 47 h 46 min ago and the API keeps failing:
   # the age passes 48 h at 14m and the alert fires 5 minutes later.
   - interval: 1m
@@ -243,6 +306,32 @@ tests:
         exp_alerts: []
       - eval_time: 33m
         alertname: FleetwireBridgeNotProducing
+        exp_alerts: []
+  # Lag over 1,000 and growing by 200 a minute: a ticket after 10 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_consumer_lag{instance="ingest-1:9090",partition="0"}'
+        values: '500+100x40'
+      - series: 'fleetwire_ingest_consumer_lag{instance="ingest-2:9090",partition="1"}'
+        values: '500+100x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FleetwireConsumerLagGrowing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: FleetwireConsumerLagGrowing
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: Ingest falls further behind Kafka; it is slower than the incoming rate.
+  # A large lag that shrinks (ingest catching up after an outage) is fine.
+  - interval: 1m
+    input_series:
+      - series: 'fleetwire_ingest_consumer_lag{instance="ingest-1:9090",partition="0"}'
+        values: '20000-100x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: FleetwireConsumerLagGrowing
         exp_alerts: []
   # bridge-1 stops answering scrapes at 6m: a ticket at 11m, no page, as
   # bridge-2 is up. The load generator is down, as it is between tests,

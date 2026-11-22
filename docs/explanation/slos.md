@@ -56,5 +56,5 @@ service stops its metrics, which silences the alerts above):
 - `FleetwireServiceDown` (page): for 2 minutes, every target of a job is down
   or Prometheus has none.
 
-`make rules-test` checks the rules with `promtool check rules` and runs the
-unit tests in `deploy/prometheus/tests/`.
+`make rules-test` checks the rules with `promtool check rules`, runs the
+unit tests in `deploy/prometheus/tests/`, and fails if an alert has no test.
