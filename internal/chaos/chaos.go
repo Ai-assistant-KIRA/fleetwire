@@ -104,10 +104,13 @@ var all = []scenario{
 		}},
 	{"network-degraded", 120 * time.Second,
 		func(ctx context.Context, r *run) error {
+			// Toxiproxy's upstream stream is device to broker, the direction
+			// the readings travel; downstream carries the acks back.
 			for _, t := range []string{
 				`{"name": "latency_down", "type": "latency", "stream": "downstream", "attributes": {"latency": 300, "jitter": 200}}`,
 				`{"name": "latency_up", "type": "latency", "stream": "upstream", "attributes": {"latency": 300, "jitter": 200}}`,
-				`{"name": "bandwidth", "type": "bandwidth", "stream": "downstream", "attributes": {"rate": 512}}`,
+				`{"name": "bandwidth_down", "type": "bandwidth", "stream": "downstream", "attributes": {"rate": 512}}`,
+				`{"name": "bandwidth_up", "type": "bandwidth", "stream": "upstream", "attributes": {"rate": 512}}`,
 				`{"name": "reset", "type": "reset_peer", "stream": "upstream", "toxicity": 0.05, "attributes": {"timeout": 10000}}`,
 			} {
 				if err := r.toxi(ctx, "POST", "/proxies/mqtt/toxics", t); err != nil {
@@ -118,7 +121,7 @@ var all = []scenario{
 		},
 		func(ctx context.Context, r *run) error {
 			var errs []error
-			for _, n := range []string{"latency_down", "latency_up", "bandwidth", "reset"} {
+			for _, n := range []string{"latency_down", "latency_up", "bandwidth_down", "bandwidth_up", "reset"} {
 				errs = append(errs, r.toxi(ctx, "DELETE", "/proxies/mqtt/toxics/"+n, ""))
 			}
 			return errors.Join(errs...)

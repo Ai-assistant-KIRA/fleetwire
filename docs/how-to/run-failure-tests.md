@@ -22,7 +22,7 @@ checker.
 | Scenario | Fault | Recovery |
 |---|---|---|
 | `network-cut` | Toxiproxy disables the device-to-broker proxy for 60 s | enable |
-| `network-degraded` | 300 ms ± 200 ms latency both ways, 512 KB/s, `reset_peer` on 5% of connections, 120 s | remove the toxics |
+| `network-degraded` | 300 ms ± 200 ms latency and 512 KB/s per connection, both ways; `reset_peer` on 5% of connections; 120 s | remove the toxics |
 | `mosquitto-restart` | `docker compose restart mosquitto` | automatic |
 | `kafka-broker-kill` | SIGKILL `kafka-2`, 60 s | start it |
 | `kafka-outage` | stop all three brokers, 60 s | start them |
