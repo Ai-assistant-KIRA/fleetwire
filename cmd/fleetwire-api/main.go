@@ -213,6 +213,7 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 		EnrollBurst:       cfg.EnrollRateBurst,
 		EnrollTokenTTL:    cfg.EnrollTokenTTL,
 		ExportDir:         cfg.ExportDir,
+		MaxActiveExports:  cfg.MaxActiveExports,
 	}, api.Deps{DB: db, Keyring: kr, Keys: keys, DeviceCA: ca, CRL: pub, CursorKey: cursorKey, Log: log, Registry: reg})
 
 	worker := jobs.NewWorker(jobs.Config{

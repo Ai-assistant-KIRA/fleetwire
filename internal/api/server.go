@@ -56,6 +56,8 @@ type Config struct {
 	EnrollBurst     int
 	EnrollTokenTTL  time.Duration
 	ExportDir       string
+	// MaxActiveExports caps a tenant's pending and running exports.
+	MaxActiveExports int
 }
 
 // Deps are the API's collaborators.
@@ -108,6 +110,9 @@ func New(cfg Config, d Deps) *Server {
 	cfg.RateBurst, cfg.AuthFailBurst, cfg.EnrollBurst = max(cfg.RateBurst, 1), max(cfg.AuthFailBurst, 1), max(cfg.EnrollBurst, 1)
 	if cfg.EnrollTokenTTL <= 0 {
 		cfg.EnrollTokenTTL = 15 * time.Minute
+	}
+	if cfg.MaxActiveExports <= 0 {
+		cfg.MaxActiveExports = 4
 	}
 	return &Server{
 		cfg:           cfg,

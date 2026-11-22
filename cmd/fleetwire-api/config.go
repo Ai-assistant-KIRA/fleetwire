@@ -41,9 +41,10 @@ type apiConfig struct {
 	KeyringDir         string `env:"FLEETWIRE_KEYRING_DIR" flag:"keyring-dir" help:"Directory of per-tenant KEK files."`
 	KeyringRootKeyFile string `env:"FLEETWIRE_KEYRING_ROOT_KEY_FILE" flag:"keyring-root-key" help:"32-byte root key that seals the KEKs. Refused if group or others have any access (use 0400 or 0600)."`
 
-	CRLFile     string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
-	CRLInterval time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h (the design republishes it daily)."`
-	ExportDir   string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
+	CRLFile          string        `env:"FLEETWIRE_CRL_FILE" flag:"crl-file" help:"Where the device CRL is written for the broker."`
+	CRLInterval      time.Duration `env:"FLEETWIRE_CRL_INTERVAL" flag:"crl-interval" default:"24h" help:"How often the CRL is rebuilt without a revocation. At most 24h (the design republishes it daily)."`
+	ExportDir        string        `env:"FLEETWIRE_EXPORT_DIR" flag:"export-dir" help:"Directory for export files. Must be on an encrypted volume."`
+	MaxActiveExports int           `env:"FLEETWIRE_API_MAX_ACTIVE_EXPORTS" flag:"max-active-exports" default:"4" help:"Exports one tenant can have pending or running at once. Further POST /v1/exports requests get 409 until one finishes."`
 
 	RateLimit         float64       `env:"FLEETWIRE_API_RATE_LIMIT" flag:"rate-limit" default:"20" help:"Requests per second per token."`
 	RateBurst         int           `env:"FLEETWIRE_API_RATE_BURST" flag:"rate-burst" default:"40" help:"Burst size per token."`
@@ -105,6 +106,9 @@ func (c *apiConfig) Validate() []error {
 		// ttl_seconds.
 		if c.EnrollTokenTTL < time.Minute || c.EnrollTokenTTL > 24*time.Hour {
 			errs = append(errs, errors.New("FLEETWIRE_ENROLL_TOKEN_TTL must be between 1m and 24h"))
+		}
+		if c.MaxActiveExports < 1 {
+			errs = append(errs, errors.New("FLEETWIRE_API_MAX_ACTIVE_EXPORTS must be at least 1"))
 		}
 		if c.JobWorkers < 0 {
 			errs = append(errs, errors.New("FLEETWIRE_JOB_WORKERS must not be negative"))

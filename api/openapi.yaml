@@ -260,7 +260,11 @@ paths:
     post:
       tags: [exports]
       operationId: createExport
-      description: "Scope: exports:write. Exports one device, or the whole tenant without a body."
+      description: >-
+        Scope: exports:write. Exports one device, or the whole tenant without
+        a body. A tenant can have a limited number of exports pending or
+        running (4 by default); beyond that the answer is 409 with code
+        too_many_exports.
       requestBody:
         required: false
         content:
@@ -296,7 +300,9 @@ paths:
     get:
       tags: [exports]
       operationId: downloadExport
-      description: "Scope: exports:read. Gzip-compressed NDJSON, one reading per line."
+      description: >-
+        Scope: exports:read. Gzip-compressed NDJSON, one reading per line.
+        Past expires_at the answer is 410 with code expired.
       parameters: [{$ref: "#/components/parameters/id"}]
       responses:
         "200":

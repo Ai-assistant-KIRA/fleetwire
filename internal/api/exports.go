@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,13 +31,24 @@ func (s *Server) createExport(w http.ResponseWriter, r *http.Request, p *princip
 		return s.internal(r, err)
 	}
 	var exp store.Export
+	var apiErr *apiError
 	err = s.db.InTenantTx(r.Context(), p.tenant, func(ctx context.Context, tx *store.Tx) error {
 		if req.DeviceID != nil {
 			if _, err := tx.GetDevice(ctx, *req.DeviceID); err != nil {
 				return err
 			}
 		}
-		var err error
+		// Each export holds a worker and a file until it finishes, so the
+		// number a tenant can queue is capped.
+		active, err := tx.LockActiveExports(ctx)
+		if err != nil {
+			return err
+		}
+		if active >= s.cfg.MaxActiveExports {
+			apiErr = &apiError{status: http.StatusConflict, code: "too_many_exports",
+				detail: fmt.Sprintf("%d exports are already pending or running; wait for one to finish", active)}
+			return nil
+		}
 		if exp, err = tx.InsertExport(ctx, id, req.DeviceID); err != nil {
 			return err
 		}
@@ -56,6 +66,9 @@ func (s *Server) createExport(w http.ResponseWriter, r *http.Request, p *princip
 	}
 	if err != nil {
 		return s.internal(r, err)
+	}
+	if apiErr != nil {
+		return apiErr
 	}
 	w.Header().Set("Location", "/v1/exports/"+id.String())
 	writeJSON(w, http.StatusAccepted, toExport(exp))
@@ -97,23 +110,23 @@ func (s *Server) downloadExport(w http.ResponseWriter, r *http.Request, p *princ
 	if e != nil {
 		return e
 	}
+	expired := &apiError{status: http.StatusGone, code: "expired", detail: "the export expired; create a new one"}
 	switch exp.Status {
 	case store.ExportReady:
 	case store.ExportExpired:
-		return &apiError{status: http.StatusGone, code: "expired", detail: "the export expired; create a new one"}
+		return expired
 	default:
 		return errConflict("the export is " + exp.Status)
+	}
+	// Retention removes expired files only when it runs; until then the
+	// file is still there but no longer offered.
+	if exp.ExpiresAt != nil && !s.now().Before(*exp.ExpiresAt) {
+		return expired
 	}
 	if exp.FilePath == nil {
 		return s.internal(r, errors.New("ready export without a file"))
 	}
-	// The path comes from the database, but it must still be inside the
-	// export directory.
-	path := filepath.Clean(*exp.FilePath)
-	if rel, err := filepath.Rel(s.cfg.ExportDir, path); err != nil || strings.HasPrefix(rel, "..") {
-		return s.internal(r, fmt.Errorf("export path %q outside %q", path, s.cfg.ExportDir))
-	}
-	f, err := os.Open(path)
+	f, err := s.openExport(*exp.FilePath)
 	if err != nil {
 		return s.internal(r, err)
 	}
@@ -135,4 +148,25 @@ func (s *Server) downloadExport(w http.ResponseWriter, r *http.Request, p *princ
 		s.log.Warn("export download interrupted", "export_id", exp.ID, "err", err)
 	}
 	return nil
+}
+
+// openExport opens an export file through an os.Root on the export
+// directory. The path comes from the database, but a path that leaves the
+// directory, by ".." or through a symbolic link, is still refused.
+func (s *Server) openExport(path string) (*os.File, error) {
+	rel, err := filepath.Rel(s.cfg.ExportDir, path)
+	if err != nil {
+		return nil, fmt.Errorf("export path %q: %w", path, err)
+	}
+	root, err := os.OpenRoot(s.cfg.ExportDir)
+	if err != nil {
+		return nil, fmt.Errorf("open export directory: %w", err)
+	}
+	// Files opened through the root stay open after it closes.
+	defer root.Close()
+	f, err := root.Open(rel)
+	if err != nil {
+		return nil, fmt.Errorf("open export file: %w", err)
+	}
+	return f, nil
 }

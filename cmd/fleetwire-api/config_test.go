@@ -16,7 +16,7 @@ func serveConfig() apiConfig {
 		DeviceBrokerURL: "tls://broker:8883", DeviceAPIURL: "https://api:8444", KeyringDir: "keys",
 		KeyringRootKeyFile: "root.key", CRLFile: "crl.pem", ExportDir: "exports", CRLInterval: 24 * time.Hour,
 		RateLimit: 20, RateBurst: 40, AuthFailRateLimit: 5, AuthFailRateBurst: 50, EnrollRateLimit: 50, EnrollRateBurst: 200,
-		EnrollTokenTTL: 15 * time.Minute,
+		EnrollTokenTTL: 15 * time.Minute, MaxActiveExports: 4,
 	}
 }
 
@@ -43,6 +43,7 @@ func TestRateLimitsAndEnrollTTLMustBeUsable(t *testing.T) {
 		"enroll rate 0":        {func(c *apiConfig) { c.EnrollRateLimit = 0 }, "FLEETWIRE_API_ENROLL_RATE_LIMIT"},
 		"enroll ttl too short": {func(c *apiConfig) { c.EnrollTokenTTL = 59 * time.Second }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
 		"enroll ttl too long":  {func(c *apiConfig) { c.EnrollTokenTTL = 25 * time.Hour }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
+		"no active exports":    {func(c *apiConfig) { c.MaxActiveExports = 0 }, "FLEETWIRE_API_MAX_ACTIVE_EXPORTS"},
 	} {
 		c := serveConfig()
 		tc.change(&c)
