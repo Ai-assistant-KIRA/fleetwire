@@ -17,7 +17,7 @@ Per-device state is in the API (`GET /v1/devices/{id}`).
 | `readings_acked_total` | counter | | seqs newly covered by end-to-end acks |
 | `unacked_readings` | gauge | | written but not yet acked |
 | `resend_total` | counter | | go-back-N restarts after an ack timeout |
-| `seq_jump_total` | counter | | server ack ahead of the device (R3.8) |
+| `seq_jump_total` | counter | | server ack ahead of the device's next seq; the agent moves its seq forward so no seq is reused |
 | `cert_renewals_total` | counter | result (`ok`, `error`) | certificate renewal attempts |
 | `mqtt_*` | | | the connection to the broker: see [MQTT connections](#mqtt-connections) |
 
@@ -25,10 +25,10 @@ Per-device state is in the API (`GET /v1/devices/{id}`).
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `forwarded_total` | counter | result (`ok`, `error`, `rejected`) | messages handled |
-| `pending_acks` | gauge | | received, not yet confirmed by Kafka |
+| `forwarded_total` | counter | result (`ok`, `rejected`, `error`) | `ok` and `rejected` count messages written to Kafka or refused by the bridge; `error` counts each Kafka write attempt that failed, so one message the bridge keeps retrying adds 1 per attempt |
+| `pending_acks` | gauge | | received, not yet confirmed by Kafka, including messages whose write is being retried |
 | `produce_seconds` | histogram | | MQTT receive to Kafka confirmation |
-| `last_produce_timestamp_seconds` | gauge | | last confirmed Kafka write |
+| `last_produce_timestamp_seconds` | gauge | | Unix time of the last confirmed Kafka write; the process start time until the first one |
 | `mqtt_*` | | | the shared subscription's connection: see [MQTT connections](#mqtt-connections) |
 
 ## Ingest (`fleetwire_ingest_*`)
@@ -56,9 +56,19 @@ Per-device state is in the API (`GET /v1/devices/{id}`).
 |---|---|---|
 | `fleetwire_api_requests_total` | counter | listener, route, code |
 | `fleetwire_api_request_seconds` | histogram | listener, route |
+| `fleetwire_api_enroll_refusals_total` | counter | outcome (`unknown`, `expired`, `used`, `tenant_inactive`) |
 | `fleetwire_jobs_total` | counter | kind (`retention`, `export`, `device_purge`, `tenant_destroy`), result (`success`, `error`) |
 | `fleetwire_jobs_running` | gauge | |
 | `fleetwire_crl_age_seconds` | gauge | |
+
+`fleetwire_api_enroll_refusals_total` counts every refused enrollment. The
+audit log keeps one entry every 10 minutes per token, or per client network
+for tokens that match nothing, so a flood of bad tokens cannot fill it.
+
+`fleetwire_crl_age_seconds` is the time since this process last published
+the CRL. Until its first publish it reports about 9.2e9 (the largest
+duration Go can hold), which the CRL alerts treat as "not published since
+start".
 
 ## MQTT connections
 
@@ -84,7 +94,8 @@ Served with `fleetwire-loadgen -metrics-listen`, next to the agent and
 |---|---|---|---|
 | `devices_running` | gauge | | device instances running now |
 | `devices_started_total` | counter | | device instances started |
-| `device_failures_total` | counter | | device instances that did not start, or stopped with an error |
+| `device_open_failures_total` | counter | | device instances that could not be opened or given an enrollment token, and never ran |
+| `device_failures_total` | counter | | device instances that ran and stopped with an error |
 
 Every binary also exports Go runtime and process metrics and
 `fleetwire_build_info{service,version,commit}`.
