@@ -52,35 +52,11 @@ type MigrationResult struct {
 // that owns the schema (never the runtime role). An advisory lock makes
 // concurrent runs from several replicas safe.
 func Migrate(ctx context.Context, ownerURL string, opts MigrateOptions) ([]MigrationResult, error) {
-	if opts.RuntimeRole == "" {
-		opts.RuntimeRole = DefaultRuntimeRole
-	}
-	fsys, err := renderMigrations(opts.RuntimeRole)
+	p, db, err := newProvider(ctx, ownerURL, opts)
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("pgx", ownerURL)
-	if err != nil {
-		return nil, fmt.Errorf("open owner connection: %w", err)
-	}
 	defer db.Close()
-	// goose keeps its version table inside the schema, so the schema has to
-	// exist before goose starts.
-	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS fleetwire`); err != nil {
-		return nil, fmt.Errorf("create schema: %w", err)
-	}
-	st, err := database.NewStore(database.DialectPostgres, "fleetwire.goose_db_version")
-	if err != nil {
-		return nil, fmt.Errorf("goose store: %w", err)
-	}
-	locker, err := lock.NewPostgresSessionLocker()
-	if err != nil {
-		return nil, fmt.Errorf("goose locker: %w", err)
-	}
-	p, err := goose.NewProvider(goose.DialectCustom, db, fsys, goose.WithStore(st), goose.WithSessionLocker(locker))
-	if err != nil {
-		return nil, fmt.Errorf("goose provider: %w", err)
-	}
 	results, err := p.Up(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("apply migrations: %w", err)
@@ -90,6 +66,47 @@ func Migrate(ctx context.Context, ownerURL string, opts MigrateOptions) ([]Migra
 		out = append(out, MigrationResult{Version: r.Source.Version, Source: r.Source.Path, Duration: r.Duration.String()})
 	}
 	return out, nil
+}
+
+// newProvider returns a goose provider for the rendered migrations and the
+// owner connection it uses, which the caller closes.
+func newProvider(ctx context.Context, ownerURL string, opts MigrateOptions) (*goose.Provider, *sql.DB, error) {
+	if opts.RuntimeRole == "" {
+		opts.RuntimeRole = DefaultRuntimeRole
+	}
+	fsys, err := renderMigrations(opts.RuntimeRole)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := sql.Open("pgx", ownerURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open owner connection: %w", err)
+	}
+	p, err := func() (*goose.Provider, error) {
+		// goose keeps its version table inside the schema, so the schema
+		// has to exist before goose starts.
+		if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS fleetwire`); err != nil {
+			return nil, fmt.Errorf("create schema: %w", err)
+		}
+		st, err := database.NewStore(database.DialectPostgres, "fleetwire.goose_db_version")
+		if err != nil {
+			return nil, fmt.Errorf("goose store: %w", err)
+		}
+		locker, err := lock.NewPostgresSessionLocker()
+		if err != nil {
+			return nil, fmt.Errorf("goose locker: %w", err)
+		}
+		p, err := goose.NewProvider(goose.DialectCustom, db, fsys, goose.WithStore(st), goose.WithSessionLocker(locker))
+		if err != nil {
+			return nil, fmt.Errorf("goose provider: %w", err)
+		}
+		return p, nil
+	}()
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
+	return p, db, nil
 }
 
 // renderMigrations returns the migration files with the runtime role filled
