@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import ops
 import pytest
 from ops import testing
@@ -140,6 +142,40 @@ def test_non_leaders_do_not_create_topics(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(leader=False))
     assert not ctx.exec_history.get(CONTAINER)
     assert SERVICE in out.get_container(CONTAINER).plan.services
+
+
+@pytest.mark.parametrize("changes", [{"tls-cert": "NEW INGEST CERT"}, {"ca-bundle": "NEW CA BUNDLE"}])
+def test_a_rotated_certificate_restarts_ingest(ctx, changes):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    before = env_of(running)
+    secret = next(iter(running.secrets))
+    rotated = dataclasses.replace(secret, latest_content={**PKI, **changes})
+    out = ctx.run(ctx.on.secret_changed(rotated), dataclasses.replace(running, secrets=[rotated]))
+    after = env_of(out)
+    # Ingest reads these files once. Pebble's replan restarts a service whose
+    # definition changed, and only the digest of the files changes it here.
+    assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
+    assert {k: v for k, v in after.items() if k != "FLEETWIRE_CONFIG_SHA256"} == {
+        k: v for k, v in before.items() if k != "FLEETWIRE_CONFIG_SHA256"
+    }
+
+
+def test_a_new_database_ca_restarts_ingest(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup(db={**DB, "tls": "True", "tls-ca": "PG CA 1"}))
+    renewed = [
+        dataclasses.replace(r, remote_app_data={**r.remote_app_data, "tls-ca": "PG CA 2"})
+        if r.endpoint == "database"
+        else r
+        for r in running.relations
+    ]
+    out = ctx.run(ctx.on.update_status(), dataclasses.replace(running, relations=renewed))
+    assert env_of(out)["FLEETWIRE_CONFIG_SHA256"] != env_of(running)["FLEETWIRE_CONFIG_SHA256"]
+
+
+def test_an_unchanged_secret_keeps_ingest_running(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    out = ctx.run(ctx.on.update_status(), running)
+    assert out.get_container(CONTAINER).plan == running.get_container(CONTAINER).plan
 
 
 def test_kafka_tls_uses_the_relation_ca(ctx):

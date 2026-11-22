@@ -55,6 +55,20 @@ def readyz(port: int) -> bool:
         return False
 
 
+def files_digest(files: dict[str, str]) -> str:
+    """SHA-256 over the paths and contents of the files written for the service.
+
+    Ingest reads its certificates and CA files once, at start. The digest goes
+    into the layer's environment, so a rotated certificate changes the layer
+    and replan restarts the service with the new files.
+    """
+    h = hashlib.sha256()
+    for path in sorted(files):
+        data = files[path].encode()
+        h.update(path.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
+    return h.hexdigest()
+
+
 @dataclass(frozen=True)
 class Kafka:
     """Connection details from the kafka_client relation."""
@@ -212,21 +226,26 @@ class FleetwireIngestCharm(ops.CharmBase):
             return
         if kafka is None or db is None or keyring is None or mqtt is None or not self._container.can_connect():
             return
-        self._write_files(pki, kafka, db)
+        digest = self._write_files(pki, kafka, db)
         env = self._environment(kafka, db, keyring, mqtt)
         if self.unit.is_leader() and not self._ensure_topics(kafka, env):
             return
+        # Not read by ingest: a new value makes replan restart it.
+        env["FLEETWIRE_CONFIG_SHA256"] = digest
         self._container.add_layer(SERVICE, self._layer(env), combine=True)
         self._container.replan()
 
-    def _write_files(self, pki: dict[str, str], kafka: Kafka, db: Database) -> None:
-        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
-        for key, name in PKI_FILES.items():
-            self._container.push(f"{PKI}/{name}", pki[key], **own)
+    def _write_files(self, pki: dict[str, str], kafka: Kafka, db: Database) -> str:
+        """Writes the service's files and returns their digest."""
+        files = {f"{PKI}/{name}": pki[key] for key, name in PKI_FILES.items()}
         if kafka.tls_ca:
-            self._container.push(f"{PKI}/kafka-ca.pem", kafka.tls_ca, **own)
+            files[f"{PKI}/kafka-ca.pem"] = kafka.tls_ca
         if db.tls_ca:
-            self._container.push(f"{PKI}/postgresql-ca.pem", db.tls_ca, **own)
+            files[f"{PKI}/postgresql-ca.pem"] = db.tls_ca
+        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
+        for path, content in files.items():
+            self._container.push(path, content, **own)
+        return files_digest(files)
 
     def _environment(self, kafka: Kafka, db: Database, keyring: str, mqtt: str) -> dict[str, str]:
         env = {
