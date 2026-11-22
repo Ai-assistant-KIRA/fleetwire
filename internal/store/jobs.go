@@ -151,6 +151,19 @@ func (t *Tx) ReleaseJob(ctx context.Context, id uuid.UUID, worker string) error 
 	return nil
 }
 
+// HasRunningJob reports whether a job of kind of the current tenant is
+// claimed by a worker (or was, by one that died and whose lease has not
+// been taken over yet).
+func (t *Tx) HasRunningJob(ctx context.Context, kind string) (bool, error) {
+	var ok bool
+	err := t.tx.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM fleetwire.jobs WHERE kind = $1 AND status = 'running')`, kind).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("running job: %w", err)
+	}
+	return ok, nil
+}
+
 // HasPendingJob reports whether the current tenant has an unfinished job
 // of kind (used to avoid starting a second tenant destroy).
 func (t *Tx) HasPendingJob(ctx context.Context, kind string) (bool, error) {
@@ -194,14 +207,29 @@ func (t *Tx) SetExportRunning(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// CompleteExport records a finished export file.
+// LockExport returns one export of the current tenant and locks its row
+// until the transaction ends.
+func (t *Tx) LockExport(ctx context.Context, id uuid.UUID) (Export, error) {
+	v, err := one[Export](t.tx.Query(ctx, `SELECT `+exportCols+` FROM fleetwire.exports WHERE id = $1 FOR UPDATE`, id))
+	if err != nil {
+		return Export{}, fmt.Errorf("lock export: %w", err)
+	}
+	return v, nil
+}
+
+// CompleteExport records the finished file of a running export. It fails
+// with ErrNotFound when the export is gone or no longer running, so the
+// caller knows that no row names the file.
 func (t *Tx) CompleteExport(ctx context.Context, id uuid.UUID, path string, sum []byte, size, readings int64, expires time.Time) error {
-	_, err := t.tx.Exec(ctx, `
+	tag, err := t.tx.Exec(ctx, `
 		UPDATE fleetwire.exports SET status = 'ready', file_path = $2, sha256 = $3, bytes = $4,
 			reading_count = $5, completed_at = now(), expires_at = $6, error = NULL
-		WHERE id = $1`, id, path, sum, size, readings, expires)
+		WHERE id = $1 AND status = 'running'`, id, path, sum, size, readings, expires)
 	if err != nil {
 		return fmt.Errorf("complete export: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("complete export: %w", ErrNotFound)
 	}
 	return nil
 }

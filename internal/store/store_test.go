@@ -726,3 +726,38 @@ func withRole(t *testing.T, raw, user, password, db string) string {
 	u.Path = "/" + db
 	return u.String()
 }
+
+// TestCompleteExportNeedsARunningExport: CompleteExport reports when no
+// running export took the file, so the caller can delete it.
+func TestCompleteExportNeedsARunningExport(t *testing.T) {
+	db := storetest.AppDB(t)
+	f := newFixture(t, db)
+	id := uuid.New()
+	complete := func(ctx context.Context, tx *store.Tx) error {
+		return tx.CompleteExport(ctx, id, "/exports/x", []byte("sum"), 1, 1, time.Now().Add(time.Hour))
+	}
+	err := db.InTenantTx(t.Context(), f.tenant, func(ctx context.Context, tx *store.Tx) error {
+		if err := complete(ctx, tx); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("complete a missing export: %v, want ErrNotFound", err)
+		}
+		if _, err := tx.InsertExport(ctx, id, nil); err != nil {
+			return err
+		}
+		if err := complete(ctx, tx); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("complete a pending export: %v, want ErrNotFound", err)
+		}
+		if err := tx.SetExportRunning(ctx, id); err != nil {
+			return err
+		}
+		if err := complete(ctx, tx); err != nil {
+			t.Errorf("complete a running export: %v", err)
+		}
+		if err := complete(ctx, tx); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("complete a ready export again: %v, want ErrNotFound", err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -196,5 +197,129 @@ func TestRetentionRemovesStaleTempFiles(t *testing.T) {
 		if !kept && !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("%s is still there (%v)", name, err)
 		}
+	}
+}
+
+// TestExportFinishingDuringADestroyLeavesNoFile: an export that finishes
+// while the API's first destroy step is uncommitted waits for it, keeps no
+// file, and the destroy then removes the tenant's export directory.
+func TestExportFinishingDuringADestroyLeavesNoFile(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	dev, _ := e.device(tenant)
+	e.readings(tenant, dev, 1, 20, time.Now())
+	exp, expJob := e.export(tenant)
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	// A failing test must still end the held transaction, or closing the
+	// pool waits for its connection forever.
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	destroyed := make(chan error, 1)
+	go func() {
+		destroyed <- e.db.InTenantTx(context.WithoutCancel(t.Context()), tenant, func(ctx context.Context, tx *store.Tx) error {
+			if _, err := tx.LockTenant(ctx); err != nil {
+				return err
+			}
+			if err := tx.SetTenantStatus(ctx, store.TenantDestroying); err != nil {
+				return err
+			}
+			if _, err := tx.RevokeAllDevices(ctx); err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-destroyed:
+		t.Fatalf("first destroy step: %v", err)
+	}
+	exported := make(chan error, 1)
+	go func() {
+		_, err := e.w.RunOnce(t.Context())
+		exported <- err
+	}()
+	waitForLockWait(t, exported)
+	releaseOnce.Do(func() { close(release) })
+	if err := <-destroyed; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-exported; err != nil {
+		t.Fatal(err)
+	}
+	if j := e.job(tenant, expJob); j.Status != store.JobSucceeded || !strings.Contains(string(j.Result), skipTenantGone) {
+		t.Fatalf("export job %s, result %s; want succeeded and skipped", j.Status, j.Result)
+	}
+	if got := e.getExport(tenant, exp); got.FilePath != nil {
+		t.Fatalf("export %s records file %s", got.Status, *got.FilePath)
+	}
+
+	e.enqueue(tenant, store.JobTenantDestroy, map[string]any{"tenant_id": tenant}, "")
+	e.runJobs()
+	if st := e.tenantStatus(tenant); st != store.TenantDestroyed {
+		t.Fatalf("tenant %s, want destroyed", st)
+	}
+	if _, err := os.Stat(filepath.Join(e.exportDir, tenant.String())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the destroyed tenant's export directory is still there (%v)", err)
+	}
+}
+
+// TestDestroyWaitsForARunningExport: while an export job of the tenant is
+// running, the destroy does not finish, so the export's temp file cannot
+// outlive it; once no export runs, the directory goes and the destroy ends.
+func TestDestroyWaitsForARunningExport(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	_, expJob := e.export(tenant)
+	// Another worker is writing this export right now.
+	e.asOwner(`UPDATE fleetwire.jobs SET status = 'running', attempts = 1, locked_by = 'elsewhere',
+		locked_until = now() + interval '1 hour' WHERE id = $1`, expJob)
+	temp := filepath.Join(e.exportDir, tenant.String(), "x.ndjson.gz.1.tmp")
+	if err := os.MkdirAll(filepath.Dir(temp), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(temp, []byte("decrypted readings"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destroyJob := e.enqueue(tenant, store.JobTenantDestroy, map[string]any{"tenant_id": tenant}, "")
+	e.runJobs()
+	if j := e.job(tenant, destroyJob); j.Status != store.JobQueued || !strings.Contains(lastError(j), "still running") {
+		t.Fatalf("destroy job %s (%s), want queued to wait for the export", j.Status, lastError(j))
+	}
+	if st := e.tenantStatus(tenant); st != store.TenantDestroying {
+		t.Fatalf("tenant %s, want destroying", st)
+	}
+	e.asOwner(`UPDATE fleetwire.jobs SET status = 'succeeded', finished_at = now(), locked_until = NULL WHERE id = $1`, expJob)
+	e.asOwner(`UPDATE fleetwire.jobs SET run_after = now() WHERE id = $1`, destroyJob)
+	e.runJobs()
+	if st := e.tenantStatus(tenant); st != store.TenantDestroyed {
+		t.Fatalf("tenant %s, want destroyed", st)
+	}
+	if _, err := os.Stat(temp); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an export temp file outlived the destroy (%v)", err)
+	}
+}
+
+// TestExportDoesNotStartForADestroyingTenant: an export job that runs after
+// the destroy started fails its export and writes nothing.
+func TestExportDoesNotStartForADestroyingTenant(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	exp, job := e.export(tenant)
+	e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
+		return tx.SetTenantStatus(ctx, store.TenantDestroying)
+	})
+	e.runJobs()
+	if j := e.job(tenant, job); j.Status != store.JobSucceeded {
+		t.Fatalf("export job %s: %s", j.Status, lastError(j))
+	}
+	if got := e.getExport(tenant, exp); got.Status != store.ExportFailed || got.Error == nil || *got.Error != skipTenantGone {
+		t.Fatalf("export %s (%v), want failed: %s", got.Status, got.Error, skipTenantGone)
+	}
+	if _, err := os.Stat(filepath.Join(e.exportDir, tenant.String())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("an export directory was created for a destroying tenant (%v)", err)
 	}
 }

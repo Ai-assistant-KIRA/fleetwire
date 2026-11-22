@@ -154,6 +154,19 @@ func (t *Tx) LockTenant(ctx context.Context) (Tenant, error) {
 	return v, nil
 }
 
+// ShareLockTenant reads the current tenant and keeps its status from
+// changing until the transaction ends, without blocking other readers of
+// the row. A tenant destroy (LockTenant) waits for it.
+func (t *Tx) ShareLockTenant(ctx context.Context) (Tenant, error) {
+	v, err := one[Tenant](t.tx.Query(ctx, `
+		SELECT id, name, status, retention_days, created_at, destroyed_at
+		FROM fleetwire.tenants WHERE id = fleetwire.current_tenant() FOR SHARE`))
+	if err != nil {
+		return Tenant{}, fmt.Errorf("share-lock tenant: %w", err)
+	}
+	return v, nil
+}
+
 // DestroyTenantKeys deletes every wrapped data key of the current tenant,
 // keeping the rows as tombstones.
 func (t *Tx) DestroyTenantKeys(ctx context.Context) error {

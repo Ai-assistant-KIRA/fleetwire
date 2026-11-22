@@ -142,19 +142,44 @@ type exportResult struct {
 	Readings int64  `json:"readings"`
 	Bytes    int64  `json:"bytes"`
 	SHA256   string `json:"sha256"`
+	// Skipped says why no file was produced, when none was.
+	Skipped string `json:"skipped,omitempty"`
 }
+
+// Reasons an export job produces no file.
+const (
+	skipExportGone   = "the export no longer exists"
+	skipTenantGone   = "the tenant is being destroyed"
+	skipExportFinish = "another attempt finished the export"
+)
 
 // export writes the tenant's (or one device's) readings as gzip NDJSON,
 // hashing the file while writing it. A retry starts over from a fresh temp
 // file, so a crash never leaves a half-written export marked ready.
+//
+// An export does not start once its tenant is no longer active, and one
+// that started before gives up when it finishes (finishExport). A tenant
+// destroy waits for those before it removes the tenant's export directory.
 func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) {
 	var exp store.Export
+	var skip string
 	err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
-		var err error
-		if exp, err = tx.GetExport(ctx, id); err != nil {
+		t, err := tx.GetTenant(ctx)
+		if err != nil {
 			return err
 		}
-		if exp.Status == store.ExportPending {
+		exp, err = tx.GetExport(ctx, id)
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			// Deleted by a tenant destroy.
+			skip = skipExportGone
+			return nil
+		case err != nil:
+			return err
+		case t.Status != store.TenantActive:
+			skip = skipTenantGone
+			return tx.FailExport(ctx, id, skipTenantGone)
+		case exp.Status == store.ExportPending:
 			return tx.SetExportRunning(ctx, id)
 		}
 		return nil
@@ -162,7 +187,11 @@ func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	if exp.Status == store.ExportReady || exp.Status == store.ExportExpired {
+	if skip != "" {
+		return exportResult{Skipped: skip}, nil
+	}
+	if exp.Status != store.ExportPending && exp.Status != store.ExportRunning {
+		// Ready, expired or failed: there is nothing left to do.
 		return exportResult{}, nil
 	}
 
@@ -217,20 +246,68 @@ func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) 
 	if err := f.Close(); err != nil {
 		return nil, fmt.Errorf("close export: %w", err)
 	}
-	if err := os.Rename(tmp, final); err != nil {
-		return nil, fmt.Errorf("rename export: %w", err)
-	}
-	if err := syncDir(dir); err != nil {
-		return nil, err
-	}
 	sum := hash.Sum(nil)
-	err = w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
-		return tx.CompleteExport(ctx, id, final, sum, counter.n, readings, w.now().Add(w.cfg.ExportTTL))
-	})
-	if err != nil {
+	res := exportResult{Readings: readings, Bytes: counter.n, SHA256: fmt.Sprintf("%x", sum)}
+	if res.Skipped, err = w.finishExport(ctx, tenant, id, tmp, final, sum, res); err != nil {
 		return nil, err
 	}
-	return exportResult{Readings: readings, Bytes: counter.n, SHA256: fmt.Sprintf("%x", sum)}, nil
+	if res.Skipped != "" {
+		return exportResult{Skipped: res.Skipped}, nil
+	}
+	return res, nil
+}
+
+// finishExport moves an export's temp file into place and marks the export
+// ready, in one transaction that holds the tenant row FOR SHARE and the
+// export row FOR UPDATE. A tenant destroy that committed first is seen,
+// and the file is not kept; one that starts later waits, then finds the
+// file through the export row and deletes it. Of two overlapping attempts,
+// the second waits and then sees the export ready, so it never replaces
+// the first one's file. finishExport returns why it gave up, or "".
+func (w *Worker) finishExport(ctx context.Context, tenant, id uuid.UUID, tmp, final string, sum []byte, res exportResult) (string, error) {
+	var skip string
+	renamed, recorded := false, false
+	err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
+		t, err := tx.ShareLockTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if t.Status != store.TenantActive {
+			skip = skipTenantGone
+			return nil
+		}
+		exp, err := tx.LockExport(ctx, id)
+		if errors.Is(err, store.ErrNotFound) {
+			skip = skipExportGone
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if exp.Status != store.ExportRunning {
+			skip = skipExportFinish
+			return nil
+		}
+		if err := os.Rename(tmp, final); err != nil {
+			return fmt.Errorf("rename export: %w", err)
+		}
+		renamed = true
+		if err := syncDir(filepath.Dir(final)); err != nil {
+			return err
+		}
+		if err := tx.CompleteExport(ctx, id, final, sum, res.Bytes, res.Readings, w.now().Add(w.cfg.ExportTTL)); err != nil {
+			return err
+		}
+		recorded = true
+		return nil
+	})
+	if err != nil && renamed && !recorded {
+		// Rolled back before the commit, so no row names the file. When only
+		// the commit failed its outcome is unknown, and the file stays: if
+		// the export is still running, the next attempt replaces it.
+		_ = os.Remove(final)
+	}
+	return skip, err
 }
 
 func (w *Worker) exportDevices(ctx context.Context, tenant uuid.UUID, only *uuid.UUID) ([]uuid.UUID, error) {
@@ -374,6 +451,27 @@ func (w *Worker) purgeDevice(ctx context.Context, tenant, device uuid.UUID) (any
 	return purgeResult{ChunksDeleted: n}, nil
 }
 
+// errExportRunning fails a destroy attempt that has to wait for an export.
+var errExportRunning = errors.New("an export of the tenant is still running; the destroy retries")
+
+// removeTenantExportDir deletes the tenant's export directory with whatever
+// is left in it: temp files of attempts that died, and files whose rows
+// were lost.
+func (w *Worker) removeTenantExportDir(tenant uuid.UUID) error {
+	root, err := os.OpenRoot(w.cfg.ExportDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open export dir: %w", err)
+	}
+	defer root.Close()
+	if err := root.RemoveAll(tenant.String()); err != nil {
+		return fmt.Errorf("remove the tenant's export dir: %w", err)
+	}
+	return nil
+}
+
 type destroyResult struct {
 	RowsDeleted int64 `json:"rows_deleted"`
 	FilesGone   int   `json:"export_files_deleted"`
@@ -386,7 +484,9 @@ type destroyResult struct {
 //  2. the tenant's KEK destroyed: from here on no copy of its data,
 //     backups included, can be decrypted;
 //  3. rows and export files deleted in batches;
-//  4. tenant marked destroyed; the tenant row and audit log stay.
+//  4. once no export of the tenant is running, its export directory
+//     removed;
+//  5. tenant marked destroyed; the tenant row and audit log stay.
 func (w *Worker) destroyTenant(ctx context.Context, tenant uuid.UUID) (any, error) {
 	var t store.Tenant
 	err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
@@ -445,6 +545,24 @@ func (w *Worker) destroyTenant(ctx context.Context, tenant uuid.UUID) (any, erro
 	if res.RowsDeleted, err = w.deleteInBatches(ctx, tenant, func(ctx context.Context, tx *store.Tx) (int64, error) {
 		return tx.DeleteTenantData(ctx, w.cfg.BatchSize)
 	}); err != nil {
+		return nil, err
+	}
+	// An export that started while the tenant was active may still be
+	// writing a temp file into the tenant's export directory, and gives up
+	// when it finishes. The directory is removed once none is running;
+	// until then this attempt fails and the job retries.
+	var running bool
+	if err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
+		var err error
+		running, err = tx.HasRunningJob(ctx, store.JobExport)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if running {
+		return nil, errExportRunning
+	}
+	if err := w.removeTenantExportDir(tenant); err != nil {
 		return nil, err
 	}
 	err = w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {

@@ -293,3 +293,34 @@ func lastError(j store.Job) string {
 	}
 	return *j.LastError
 }
+
+// waitForLockWait returns once a connection of this test waits for a row
+// lock. It fails the test if done reports first, that is, if the other
+// side went through without waiting.
+func waitForLockWait(t *testing.T, done <-chan error) {
+	t.Helper()
+	super, err := pgx.Connect(t.Context(), storetest.Start(t).SuperURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer super.Close(context.WithoutCancel(t.Context()))
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("finished (err %v) without waiting for the other transaction", err)
+		default:
+		}
+		var waiting int
+		if err := super.QueryRow(t.Context(), `
+			SELECT count(*) FROM pg_stat_activity WHERE application_name = $1 AND wait_event_type = 'Lock'`,
+			t.Name()).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("nothing of this test started waiting for a lock")
+}
