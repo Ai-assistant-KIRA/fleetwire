@@ -2,10 +2,12 @@ package ingest
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
 
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/crypto/keyring"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/kafkahdr"
 )
 
@@ -77,5 +80,73 @@ func TestDeadLetteredBatchesAreCountedOnce(t *testing.T) {
 	recs := dlq()
 	if len(recs) != 2 || dlqReason(recs[0]) != "decode" || dlqReason(recs[1]) != "bad_key" {
 		t.Fatalf("DLQ records: %d", len(recs))
+	}
+}
+
+// Readiness follows outages of the database or the keyring, not batches
+// that fail for their own reasons: those end in the DLQ, and one device
+// sending them must not make the instance look broken.
+func TestOnlyOutagesMakeIngestUnready(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		proc := &fakeProc{}
+		s, dlq := testService(t, proc)
+		proc.fn = func(int) (Outcome, error) {
+			if s.failingSince.Load() != 0 {
+				t.Error("a non-transient batch error marked the database as failing")
+			}
+			return Outcome{}, errors.New("value out of range for this batch")
+		}
+		if err := s.handle(t.Context(), &kgo.Record{Key: []byte(uuid.NewString())}); err != nil {
+			t.Fatal(err)
+		}
+		if recs := dlq(); len(recs) != 1 || dlqReason(recs[0]) != "db_error" {
+			t.Fatalf("a batch that keeps failing should end in the DLQ as db_error; got %d records", len(recs))
+		}
+		if err := s.Ready(t.Context()); err != nil {
+			t.Fatalf("Ready after a failing batch: %v", err)
+		}
+
+		proc.fn = func(call int) (Outcome, error) {
+			if call <= 8 {
+				return Outcome{}, keyring.ErrUnavailable
+			}
+			if s.failingSince.Load() == 0 {
+				t.Error("a keyring outage did not mark ingest as failing")
+			}
+			return Outcome{Result: ResultStored}, nil
+		}
+		proc.mu.Lock()
+		proc.calls = 0
+		proc.mu.Unlock()
+		if err := s.handle(t.Context(), &kgo.Record{Key: []byte(uuid.NewString())}); err != nil {
+			t.Fatal(err)
+		}
+		if s.failingSince.Load() != 0 {
+			t.Fatal("a stored batch did not end the run of failures")
+		}
+	})
+}
+
+// Records of one device must stay in arrival order (it keeps the device's
+// row lock uncontended), and nothing may be lost or repeated by the split.
+func TestByDeviceKeepsEachDevicesOrder(t *testing.T) {
+	var records []*kgo.Record
+	for i, key := range []string{"a", "b", "a", "c", "b", "a", ""} {
+		records = append(records, &kgo.Record{Key: []byte(key), Offset: int64(i)})
+	}
+	var got [][]int64
+	for _, g := range byDevice(records) {
+		var offsets []int64
+		for _, r := range g {
+			offsets = append(offsets, r.Offset)
+		}
+		got = append(got, offsets)
+	}
+	want := [][]int64{{0, 2, 5}, {1, 4}, {3}, {6}}
+	if !slices.EqualFunc(got, want, slices.Equal[[]int64]) {
+		t.Fatalf("groups = %v, want %v", got, want)
+	}
+	if byDevice(nil) != nil {
+		t.Fatal("no records should give no groups")
 	}
 }

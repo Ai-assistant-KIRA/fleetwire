@@ -73,8 +73,8 @@ type Service struct {
 	// produceDLQ writes one record to the dead-letter topic and waits for
 	// Kafka to confirm it.
 	produceDLQ func(context.Context, *kgo.Record) error
-	// failingSince is the Unix nano time of the first database error in the
-	// current run of failures, or 0.
+	// failingSince is the Unix nano time of the first database or keyring
+	// outage error in the current run of failures, or 0.
 	failingSince atomic.Int64
 }
 
@@ -298,7 +298,6 @@ func (s *Service) handle(ctx context.Context, r *kgo.Record) error {
 			return ctx.Err()
 		}
 		s.m.DBRetries.Inc()
-		s.failingSince.CompareAndSwap(0, time.Now().UnixNano())
 		switch {
 		case errors.Is(err, ErrOverlap):
 			s.log.Error("exclusion constraint rejected a chunk; sending the batch to the DLQ (bug signal, the device will resend)", "device_id", device, "err", err)
@@ -306,7 +305,11 @@ func (s *Service) handle(ctx context.Context, r *kgo.Record) error {
 			return s.deadLetter(ctx, r, "exclusion_violation", err.Error())
 		case store.IsTransient(err), errors.Is(err, keyring.ErrUnavailable):
 			// Outages of the database or the API's keyring delay batches;
-			// they never send them to the dead-letter topic.
+			// they never send them to the dead-letter topic. Only they make
+			// the instance unready: a batch that fails for its own reasons
+			// ends in the DLQ below, and one device sending such batches
+			// must not take ingest out of service.
+			s.failingSince.CompareAndSwap(0, time.Now().UnixNano())
 			if attempt%20 == 0 {
 				s.log.Warn("database or keyring unavailable; retrying the batch", "device_id", device, "attempt", attempt, "err", err)
 			}
