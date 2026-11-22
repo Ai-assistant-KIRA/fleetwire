@@ -41,8 +41,17 @@ archives:
     formats: [tar.gz]
     files: [LICENSE, NOTICE]
 
+# The agent snaps come from snapcraft (snap/snapcraft.yaml), which the
+# release workflow runs on an amd64 and an arm64 runner before GoReleaser.
+# That workflow sets FLEETWIRE_SNAP_DIR to the snaps and their SBOMs; listing
+# them here puts their digests in checksums.txt, which the Sigstore bundle
+# signs. Without the variable (a local snapshot) the globs are empty and
+# GoReleaser skips them.
 checksum:
   name_template: checksums.txt
+  extra_files: &snap_files
+    - glob: '{{ if isEnvSet "FLEETWIRE_SNAP_DIR" }}{{ .Env.FLEETWIRE_SNAP_DIR }}/*.snap{{ end }}'
+    - glob: '{{ if isEnvSet "FLEETWIRE_SNAP_DIR" }}{{ .Env.FLEETWIRE_SNAP_DIR }}/*.snap.sbom.json{{ end }}'
 
 # Syft SBOM (SPDX JSON) for every archive.
 sboms:
@@ -92,6 +101,7 @@ release:
     owner: Ai-assistant-KIRA
     name: fleetwire
   prerelease: auto
+  extra_files: *snap_files
 
 changelog:
   use: github

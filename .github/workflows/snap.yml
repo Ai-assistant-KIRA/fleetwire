@@ -2,9 +2,11 @@ name: snap
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
     paths: ["snap/**", "cmd/fleetwire-agent/**", "internal/**", "go.mod"]
+  # release.yml builds a tag's snaps through this workflow and publishes
+  # them, so a tag push does not start a second, separate build.
+  workflow_call:
 
 permissions:
   contents: read
@@ -48,3 +50,4 @@ jobs:
         with:
           name: snap-${{ matrix.runner }}
           path: ${{ steps.snap.outputs.snap }}
+          if-no-files-found: error

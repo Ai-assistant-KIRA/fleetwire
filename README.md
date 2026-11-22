@@ -166,8 +166,8 @@ how to check the signatures.
   ext4, under QEMU without KVM; Ubuntu Core's own boot and partition layout
   were not tested.
 - **The agent snap is not in the Snap Store.** Build it with `make snap`
-  and install it with `--dangerous`. The release publishes binaries and
-  container images only.
+  and install it with `--dangerous`. Each release also attaches the amd64
+  and arm64 snaps and their SBOMs, which the signed `checksums.txt` covers.
 - **One API unit on Kubernetes.** The local keyring keeps the tenant KEKs
   on the unit's storage. A Vault or KMS keyring backend would lift this.
 - **Revocation at the broker lags on Kubernetes** by up to the
