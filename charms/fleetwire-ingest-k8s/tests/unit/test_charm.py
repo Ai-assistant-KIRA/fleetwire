@@ -41,9 +41,9 @@ def not_ready(monkeypatch):
     monkeypatch.setattr(charm, "readyz", lambda port: False)
 
 
-def setup(*, kafka=None, db=None, api=None, mqtt=True, pki=None, leader=True, topics_code=0, config=None):
+def setup(*, kafka=None, db=None, api=None, mqtt=True, pki=None, leader=True, topics_code=0, config=None, peer=None):
     """Builds a state with every input ready unless a test turns one off."""
-    secrets, relations = [], [testing.PeerRelation(PEER)]
+    secrets, relations = [], [testing.PeerRelation(PEER, local_app_data=peer or {})]
     cfg = dict(config or {})
     if pki is not False:
         s = testing.Secret(tracked_content=pki or PKI)
@@ -138,10 +138,36 @@ def test_failed_topic_creation_keeps_ingest_down(ctx):
     assert SERVICE not in out.get_container(CONTAINER).plan.services
 
 
-def test_non_leaders_do_not_create_topics(ctx):
+def peer_of(out: testing.State) -> testing.PeerRelation:
+    return next(r for r in out.relations if r.endpoint == PEER)
+
+
+def test_non_leaders_wait_for_the_leader_to_create_the_topics(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(leader=False))
     assert not ctx.exec_history.get(CONTAINER)
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
+    assert out.unit_status == testing.WaitingStatus("waiting for the leader to create the Kafka topics")
+
+
+def test_non_leaders_start_when_the_leader_records_the_topics(ctx):
+    leader = ctx.run(ctx.on.config_changed(), setup())
+    published = dict(peer_of(leader).local_app_data)
+    st = setup(leader=False, peer=published)
+    # The leader, unit 1, wrote the topics into the peer application data.
+    peer = dataclasses.replace(next(r for r in st.relations if r.endpoint == PEER), peers_data={1: {}})
+    st = dataclasses.replace(st, relations=[peer, *(r for r in st.relations if r.endpoint != PEER)])
+    out = ctx.run(ctx.on.relation_changed(peer, remote_unit=1), st)
+    # Only the leader ran ensure-topics.
+    assert len(ctx.exec_history[CONTAINER]) == 1
     assert SERVICE in out.get_container(CONTAINER).plan.services
+    assert out.unit_status == testing.WaitingStatus("waiting for ingest to become ready")
+
+
+def test_topics_for_another_kafka_do_not_count(ctx):
+    leader = ctx.run(ctx.on.config_changed(), setup())
+    published = dict(peer_of(leader).local_app_data)
+    out = ctx.run(ctx.on.config_changed(), setup(leader=False, peer=published, config={"kafka-replication": 1}))
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
 
 
 @pytest.mark.parametrize("changes", [{"tls-cert": "NEW INGEST CERT"}, {"ca-bundle": "NEW CA BUNDLE"}])

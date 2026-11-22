@@ -110,6 +110,7 @@ class FleetwireIngestCharm(ops.CharmBase):
             self.on.leader_elected,
             self.on.update_status,
             self.on.secret_changed,
+            self.on[PEER].relation_changed,
             self.on.api_relation_changed,
             self.on.api_relation_broken,
             self.on.mqtt_relation_changed,
@@ -199,6 +200,8 @@ class FleetwireIngestCharm(ops.CharmBase):
                 )
             elif ready() is None:
                 event.add_status(ops.WaitingStatus(waiting))
+        if not self.unit.is_leader() and (kafka := self._kafka()) is not None and not self._topics_ready(kafka):
+            event.add_status(ops.WaitingStatus("waiting for the leader to create the Kafka topics"))
         if not self._container.can_connect():
             event.add_status(ops.WaitingStatus("waiting for the workload container"))
         elif self._service_ready():
@@ -228,7 +231,12 @@ class FleetwireIngestCharm(ops.CharmBase):
             return
         digest = self._write_files(pki, kafka, db)
         env = self._environment(kafka, db, keyring, mqtt)
-        if self.unit.is_leader() and not self._ensure_topics(kafka, env):
+        if self.unit.is_leader():
+            if not self._ensure_topics(kafka, env):
+                return
+        elif not self._topics_ready(kafka):
+            # Only the leader creates the topics. A unit that started first
+            # would join the consumer group before the topics exist.
             return
         # Not read by ingest: a new value makes replan restart it.
         env["FLEETWIRE_CONFIG_SHA256"] = digest
@@ -273,15 +281,24 @@ class FleetwireIngestCharm(ops.CharmBase):
             env["FLEETWIRE_KAFKA_TLS_CA_FILE"] = f"{PKI}/kafka-ca.pem"
         return env
 
+    def _topics_key(self, kafka: Kafka) -> str:
+        """Names the Kafka, login and replication setting the topics are for."""
+        key = f"{kafka.endpoints}|{kafka.username}|{self.config['kafka-replication']}"
+        return hashlib.sha256(key.encode()).hexdigest()
+
+    def _topics_ready(self, kafka: Kafka) -> bool:
+        """Whether the leader has recorded topics for this Kafka in the peer data."""
+        rel = self.model.get_relation(PEER)
+        return rel is not None and rel.data[self.app].get("topics") == self._topics_key(kafka)
+
     def _ensure_topics(self, kafka: Kafka, env: dict[str, str]) -> bool:
-        """Creates the topics once per Kafka and replication setting."""
+        """Creates the topics once per Kafka and replication setting (leader only)."""
         rel = self.model.get_relation(PEER)
         if rel is None:
             return False
-        key = f"{kafka.endpoints}|{kafka.username}|{self.config['kafka-replication']}"
-        done = hashlib.sha256(key.encode()).hexdigest()
-        if rel.data[self.app].get("topics") == done:
+        if self._topics_ready(kafka):
             return True
+        done = self._topics_key(kafka)
         self.unit.status = ops.MaintenanceStatus("creating Kafka topics")
         try:
             self._container.exec([BINARY, "ensure-topics"], environment=env, timeout=600).wait_output()
