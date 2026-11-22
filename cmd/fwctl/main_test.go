@@ -152,8 +152,10 @@ func TestFwctlAgainstRealAPI(t *testing.T) {
 	}
 }
 
-// ttl_seconds 0 means "the server default", so a sub-second -ttl must not
-// be truncated to it.
+// The API takes ttl_seconds in whole seconds and rejects 0, so fwctl
+// refuses a -ttl it would have to truncate (500ms would become 0) instead of
+// sending another lifetime. Without -ttl it sends no ttl_seconds and the
+// server's default applies.
 func TestEnrollTokenTTLMustBeWholeSeconds(t *testing.T) {
 	env := map[string]string{"FWCTL_URL": "https://127.0.0.1:1", "FWCTL_TOKEN": "fwt_unused"}
 	var out, errOut bytes.Buffer
