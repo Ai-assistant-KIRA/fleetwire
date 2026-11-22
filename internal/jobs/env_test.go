@@ -1,8 +1,13 @@
 package jobs
 
 import (
+	"bufio"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -186,6 +191,36 @@ func (e *env) export(tenant uuid.UUID) (uuid.UUID, uuid.UUID) {
 		return err
 	})
 	return id, e.enqueue(tenant, store.JobExport, map[string]any{"export_id": id}, "export:"+id.String())
+}
+
+// exportLines checks a ready export's file against its recorded digest and
+// returns the number of readings in it.
+func (e *env) exportLines(tenant, id uuid.UUID) int {
+	e.t.Helper()
+	exp := e.getExport(tenant, id)
+	if exp.Status != store.ExportReady || exp.FilePath == nil {
+		e.t.Fatalf("export %s is %s, want ready with a file", id, exp.Status)
+	}
+	data, err := os.ReadFile(*exp.FilePath)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	if sum := sha256.Sum256(data); !bytes.Equal(sum[:], exp.SHA256) {
+		e.t.Fatalf("export file digest %x, recorded %x", sum, exp.SHA256)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	lines := 0
+	sc := bufio.NewScanner(zr)
+	for sc.Scan() {
+		lines++
+	}
+	if err := sc.Err(); err != nil {
+		e.t.Fatal(err)
+	}
+	return lines
 }
 
 func (e *env) getExport(tenant, id uuid.UUID) store.Export {

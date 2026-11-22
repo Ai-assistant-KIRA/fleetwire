@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -123,6 +125,76 @@ func TestRetentionDeletesOnlyFilesInTheExportDir(t *testing.T) {
 	for _, id := range ids {
 		if got := e.getExport(tenant, id); got.Status != store.ExportExpired {
 			t.Errorf("export %s is %s, want expired", id, got.Status)
+		}
+	}
+}
+
+// TestExportAttemptsDoNotShareAFile: an export does not write into or
+// delete a temp file another attempt of the same export is writing.
+func TestExportAttemptsDoNotShareAFile(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	dev, _ := e.device(tenant)
+	e.readings(tenant, dev, 1, 50, time.Now())
+	exp, job := e.export(tenant)
+	// Every attempt used this one path before.
+	other := filepath.Join(e.exportDir, tenant.String(), exp.String()+".ndjson.gz.tmp")
+	if err := os.MkdirAll(filepath.Dir(other), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(other, []byte("another attempt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.runJobs()
+	if j := e.job(tenant, job); j.Status != store.JobSucceeded {
+		t.Fatalf("export job %s: %s", j.Status, lastError(j))
+	}
+	if got, err := os.ReadFile(other); err != nil || string(got) != "another attempt" {
+		t.Fatalf("the other attempt's file now holds %q (%v)", got, err)
+	}
+	if n := e.exportLines(tenant, exp); n != 50 {
+		t.Fatalf("export has %d readings, want 50", n)
+	}
+}
+
+// TestRetentionRemovesStaleTempFiles: temp files no attempt wrote to for an
+// hour are deleted; fresh ones and finished exports stay.
+func TestRetentionRemovesStaleTempFiles(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	dir := filepath.Join(e.exportDir, tenant.String())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * staleTempAge)
+	files := map[string]bool{ // name: kept
+		"a.ndjson.gz.123.tmp": false,
+		"b.ndjson.gz.456.tmp": true,
+		"c.ndjson.gz":         true,
+	}
+	for name, kept := range files {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if !kept || !strings.HasSuffix(name, ".tmp") {
+			if err := os.Chtimes(p, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	job := e.enqueue(tenant, store.JobRetention, struct{}{}, "")
+	e.runJobs()
+	if j := e.job(tenant, job); j.Status != store.JobSucceeded {
+		t.Fatalf("retention %s: %s", j.Status, lastError(j))
+	}
+	for name, kept := range files {
+		_, err := os.Stat(filepath.Join(dir, name))
+		if kept && err != nil {
+			t.Errorf("%s was deleted", name)
+		}
+		if !kept && !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s is still there (%v)", name, err)
 		}
 	}
 }

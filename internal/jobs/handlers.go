@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,10 +21,53 @@ import (
 )
 
 type retentionResult struct {
-	Cutoff         time.Time `json:"cutoff"`
-	ChunksDeleted  int64     `json:"chunks_deleted"`
-	GapsDeleted    int64     `json:"gaps_deleted"`
-	ExportsExpired int       `json:"exports_expired"`
+	Cutoff           time.Time `json:"cutoff"`
+	ChunksDeleted    int64     `json:"chunks_deleted"`
+	GapsDeleted      int64     `json:"gaps_deleted"`
+	TempFilesDeleted int       `json:"temp_files_deleted"`
+	ExportsExpired   int       `json:"exports_expired"`
+}
+
+// tempSuffix ends the name of every export file still being written.
+const tempSuffix = ".tmp"
+
+// staleTempAge is how long an export temp file goes unchanged before
+// retention deletes it. A running export writes to its file all the time,
+// so one untouched for this long belongs to an attempt that died.
+const staleTempAge = time.Hour
+
+// removeStaleTemps deletes the tenant's export temp files that no attempt
+// has written to for staleTempAge. They hold decrypted readings.
+func (w *Worker) removeStaleTemps(tenant uuid.UUID) (int, error) {
+	dir := filepath.Join(w.cfg.ExportDir, tenant.String())
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("list export dir: %w", err)
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), tempSuffix) {
+			continue
+		}
+		info, err := e.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return n, fmt.Errorf("stat export temp file: %w", err)
+		}
+		if w.now().Sub(info.ModTime()) < staleTempAge {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return n, fmt.Errorf("remove stale export temp file: %w", err)
+		}
+		n++
+	}
+	return n, nil
 }
 
 // retention deletes readings and gap records older than the tenant's
@@ -50,6 +94,9 @@ func (w *Worker) retention(ctx context.Context, tenant uuid.UUID) (any, error) {
 	if res.GapsDeleted, err = w.deleteInBatches(ctx, tenant, func(ctx context.Context, tx *store.Tx) (int64, error) {
 		return tx.DeleteGapsBefore(ctx, res.Cutoff, w.cfg.BatchSize)
 	}); err != nil {
+		return nil, err
+	}
+	if res.TempFilesDeleted, err = w.removeStaleTemps(tenant); err != nil {
 		return nil, err
 	}
 	for {
@@ -124,11 +171,16 @@ func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) 
 		return nil, fmt.Errorf("export dir: %w", err)
 	}
 	final := filepath.Join(dir, id.String()+".ndjson.gz")
-	tmp := final + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	// Each attempt writes its own temp file. Two attempts of one export can
+	// overlap, when a worker stalls past its lease and another one takes the
+	// job over, and with one shared file each truncated and wrote into the
+	// other's stream. Temp files of attempts that died are removed by
+	// retention (removeStaleTemps).
+	f, err := os.CreateTemp(dir, id.String()+".ndjson.gz.*"+tempSuffix)
 	if err != nil {
 		return nil, fmt.Errorf("create export file: %w", err)
 	}
+	tmp := f.Name()
 	defer func() { _ = os.Remove(tmp) }()
 	hash := sha256.New()
 	counter := &countWriter{w: io.MultiWriter(f, hash)}
