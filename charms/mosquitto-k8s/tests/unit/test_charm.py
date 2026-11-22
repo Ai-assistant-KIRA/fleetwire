@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 import pytest
@@ -218,6 +219,26 @@ def test_reports_what_is_missing(ctx, root, api, args, status):
     out = ctx.run(ctx.on.config_changed(), setup(root, **args))
     assert out.unit_status == status
     assert SERVICE not in out.get_container(CONTAINER).plan.services
+
+
+def test_a_second_unit_does_not_start_a_broker(ctx, root, api):
+    st = dataclasses.replace(setup(root), planned_units=2, leader=False)
+    out = ctx.run(ctx.on.config_changed(), st)
+    assert SERVICE not in out.get_container(CONTAINER).plan.services
+    assert out.unit_status == testing.BlockedStatus(
+        "scale to 1 unit: sessions and retained acks live in one broker (planned 2)"
+    )
+
+
+def test_the_running_broker_keeps_loading_crls_after_a_scale_up(ctx, root, api, signals):
+    running = ctx.run(ctx.on.config_changed(), setup(root))
+    api.crl = CRL_V2
+    out = ctx.run(ctx.on.update_status(), dataclasses.replace(running, planned_units=2))
+    assert signals == [("SIGHUP", (SERVICE,))]
+    assert (root / "crl/crl.pem").read_bytes() == CRL_V2
+    assert out.unit_status == testing.BlockedStatus(
+        "scale to 1 unit: sessions and retained acks live in one broker (planned 2)"
+    )
 
 
 def test_active_when_listening(ctx, root, api, monkeypatch):

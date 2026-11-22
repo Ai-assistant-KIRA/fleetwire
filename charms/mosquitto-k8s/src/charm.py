@@ -184,6 +184,10 @@ class MosquittoCharm(ops.CharmBase):
         return self._container.can_connect() and self._container.exists(CRL_FILE)
 
     def _on_collect_status(self, event: ops.CollectStatusEvent) -> None:
+        if (planned := self.app.planned_units()) > 1:
+            event.add_status(
+                ops.BlockedStatus(f"scale to 1 unit: sessions and retained acks live in one broker (planned {planned})")
+            )
         pki = self._pki()
         if not self.config.get("pki-secret"):
             event.add_status(ops.BlockedStatus("set pki-secret to the ID of the broker certificate secret"))
@@ -228,6 +232,13 @@ class MosquittoCharm(ops.CharmBase):
         if max_queued < 1 or not self._container.can_connect():
             return
         c = self._container
+        if self.app.planned_units() > 1 and SERVICE not in c.get_plan().services:
+            # The brokers do not share sessions or retained messages, and the
+            # Kubernetes service spreads clients over every unit: a device on
+            # one broker would never see the acks ingest publishes on the
+            # other. Only a broker that already runs keeps going, so CRL
+            # updates still reach it until the application is scaled back.
+            return
         own = {"user_id": MOSQUITTO_UID, "group_id": MOSQUITTO_UID, "make_dirs": True}
         conf = render_config(max_queued)
         c.push(f"{CONF_DIR}/mosquitto.conf", conf, permissions=0o644, **own)
