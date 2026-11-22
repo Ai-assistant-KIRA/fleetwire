@@ -45,12 +45,24 @@ so the runner cannot see a recovery faster than about 5 to 10 s. For
 devices' reconnect backoff (full jitter, up to 60 s), so it is often close
 to a minute after long outages.
 
-The runner queries that p99 every 2 s from the end of the fault and stops
-at the first value under 5 s. The 20 s window can still hold mostly
-readings committed before or during the fault, so the first query can pass
-before a backlog reaches the database. A recovery of `0s` in the recorded
+The tables recorded so far in `docs/results/` and the README were measured
+with the earlier method. The runner queried the p99 over a 20 s window
+every 2 s from the end of the fault and stopped at the first value under
+5 s, without checking connections. That window could still hold mostly
+readings committed before or during the fault, so the first query could
+pass before a backlog reached the database. A recovery of `0s` in those
 tables says that the first query passed, not that the backlog was already
 stored.
+
+The checker compares each device's line in `results.jsonl` (its last seq
+and the gaps it reported) with what the database holds, and the table takes
+its counts from the checker. **Devices** is the number of devices the
+checker saw, so a device that never started shows as a short count and
+fails the row. Besides missing and duplicate seqs, the checker counts
+`beyond_last_seq`: stored seqs above the device's last seq, which is what a
+device that lost its local state and reused seqs leaves behind. Any of them
+fails the scenario. The row's note names failures that have no column of
+their own.
 
 Results go to `docs/results/<time>-<commit>.md` and `.json`. Raw logs,
 `results.jsonl` and checker reports go to `docs/results/raw/` (git-ignored).

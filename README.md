@@ -39,9 +39,13 @@ Every scenario runs the real stack (`make up`) with thousands of real agent
 instances in one process, injects the fault (or kills the process), keeps
 the load on, and then reads everything back from the database, decrypted.
 A scenario passes only with 0 missing and 0 duplicate seqs. Recovery is the
-time from the end of the fault until the p99 delay from collection to
-commit is under 5 s again. A `0s` means the first check, right after the
-fault, passed; it can pass before a backlog is stored
+time from the end of the fault until every device is connected again and
+the p99 delay from collection to commit, over readings stored after the
+fault, is under 5 s, both holding for 30 s; for the agent kill it includes
+reopening every device. The tables below were measured with an earlier
+method that checked only the p99, over a window that still held readings
+stored before the fault ended, so a `0s` there means the first check right
+after the fault passed, possibly before a backlog was stored
 ([how it is measured](docs/how-to/run-failure-tests.md)).
 
 All runs below used one UpCloud VM (4 vCPU AMD EPYC 9575F, 8 GB RAM,
