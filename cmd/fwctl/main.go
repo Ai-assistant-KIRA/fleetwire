@@ -39,7 +39,7 @@ Usage: fwctl [-url URL] [-token TOKEN] [-ca-file FILE] [-o table|json] <group> <
 
 Operator token (fwo_...):
   tenant create -name NAME [-retention-days N]
-  tenant list
+  tenant list [-limit N]
   tenant destroy ID -yes
   token create -tenant ID -name NAME -scopes a,b      first token of a tenant
   enroll-token create -tenant ID [-count N] [-ttl 15m]
@@ -50,15 +50,15 @@ Tenant token (fwt_...):
   tenant show
   tenant set-retention DAYS
   token create -name NAME -scopes a,b
-  token list
+  token list [-limit N]
   token revoke ID
   enroll-token create [-count N] [-ttl 15m]
-  device list [-status active|revoked|deleted]
+  device list [-status active|revoked|deleted] [-limit N]
   device show ID
   device revoke ID
   device delete ID -yes
   device readings ID [-from RFC3339] [-to RFC3339] [-metric NAME] [-limit N]
-  device gaps ID
+  device gaps ID [-limit N]
   export create [-device ID]
   export status ID
   export download ID -out FILE
@@ -492,8 +492,14 @@ func (c *cli) show(ctx context.Context, method, path string, body any, cols []st
 	return c.print([]json.RawMessage{data}, cols, true)
 }
 
-// list follows next_cursor until the end, or until limit items.
+// list follows next_cursor until the end, or until limit items. path
+// carries the endpoint's largest page size; a smaller limit asks for that
+// many instead.
 func (c *cli) list(ctx context.Context, path string, limit int, cols []string) error {
+	path, err := pageSize(path, limit)
+	if err != nil {
+		return err
+	}
 	var items []json.RawMessage
 	next := path
 	for next != "" {
@@ -527,11 +533,37 @@ func (c *cli) list(ctx context.Context, path string, limit int, cols []string) e
 	return c.print(items, cols, false)
 }
 
+// pageSize lowers the limit query parameter of path to limit, when limit
+// is set and smaller.
+func pageSize(path string, limit int) (string, error) {
+	if limit < 0 {
+		return "", errors.New("-limit must not be negative")
+	}
+	u, err := url.Parse(path)
+	if err != nil {
+		return "", fmt.Errorf("parse path: %w", err)
+	}
+	q := u.Query()
+	most, err := strconv.Atoi(q.Get("limit"))
+	if err != nil {
+		return "", fmt.Errorf("path %s has no page size: %w", path, err)
+	}
+	if limit == 0 || limit >= most {
+		return path, nil
+	}
+	q.Set("limit", strconv.Itoa(limit))
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 // print writes items as a table or, with -o json, as JSON: one object for
-// single results, an array for lists.
+// single results, an array for lists, [] for an empty one.
 func (c *cli) print(items []json.RawMessage, cols []string, single bool) error {
 	if c.output == "json" {
 		var v any = items
+		if items == nil {
+			v = []json.RawMessage{}
+		}
 		if single && len(items) == 1 {
 			v = items[0]
 		}

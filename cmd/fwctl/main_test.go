@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"flag"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -115,6 +117,18 @@ func TestFwctlAgainstRealAPI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "403 forbidden") {
 		t.Fatalf("tenant token on operator endpoint: %v", err)
 	}
+
+	// An empty list is [] in JSON, not null.
+	out, err = fw(tok.Token, "-o", "json", "device", "gaps", dev.ID.String())
+	if err != nil || strings.TrimSpace(out) != "[]" {
+		t.Fatalf("device gaps of a device without gaps: %q, %v", out, err)
+	}
+	var tokens []struct{ ID string }
+	mustJSON(tok.Token, &tokens, "token", "list", "-limit", "1")
+	if len(tokens) != 1 {
+		t.Fatalf("token list -limit 1 = %+v", tokens)
+	}
+
 	if _, err := fw(h.OperatorToken, "tenant", "destroy", tenant.ID, "-yes"); err != nil {
 		t.Fatal(err)
 	}
@@ -183,5 +197,31 @@ func TestParseInterleavedStopsAtDoubleDash(t *testing.T) {
 			t.Errorf("parseInterleaved(%q) = %q, -yes %v, -out %q, %v; want %q, %v, %q",
 				c.args, pos, *yes, *out, err, c.pos, c.yes, c.out)
 		}
+	}
+}
+
+// -limit is the page size the API is asked for, up to the endpoint's
+// largest; an empty list prints [] in JSON.
+func TestLimitSetsThePageSize(t *testing.T) {
+	var limits []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limits = append(limits, r.URL.Query().Get("limit"))
+		_, _ = w.Write([]byte(`{"items": []}`))
+	}))
+	t.Cleanup(srv.Close)
+	for _, c := range []struct {
+		limit, want string
+	}{{"5", "5"}, {"5000", "1000"}, {"0", "1000"}} {
+		limits = nil
+		out, err := fwctlEnv(t, srv.URL, "-o", "json", "device", "list", "-limit", c.limit)
+		if err != nil || strings.TrimSpace(out) != "[]" {
+			t.Fatalf("device list -limit %s: %q, %v", c.limit, out, err)
+		}
+		if len(limits) != 1 || limits[0] != c.want {
+			t.Errorf("device list -limit %s asked for limit %v, want %s", c.limit, limits, c.want)
+		}
+	}
+	if _, err := fwctlEnv(t, srv.URL, "device", "list", "-limit", "-1"); err == nil {
+		t.Fatal("negative -limit accepted")
 	}
 }
