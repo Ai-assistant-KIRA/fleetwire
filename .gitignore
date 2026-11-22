@@ -27,6 +27,8 @@ __pycache__/
 *.pyc
 .venv/
 .tox/
+.pytest_cache/
+.ruff_cache/
 /charms/*/build/
 /charms/*/.coverage
 
