@@ -206,10 +206,16 @@ func TestRetryStopsWhenTheConnectionIsLost(t *testing.T) {
 	})
 }
 
-// Readiness gives a new bridge ReadyAfter to confirm its first write.
+// Before the first write, the last-produce gauge holds the start time. At
+// 0 it read as a bridge that had not written since 1970, so the alert on it
+// could fire as soon as a new bridge had a write in flight. Readiness gives
+// a new bridge the same ReadyAfter grace.
 func TestColdStartCountsFromProcessStart(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, k := testBridge(t)
+		if got := testutil.ToFloat64(b.m.lastOK); got != float64(time.Now().Unix()) {
+			t.Fatalf("last produce timestamp %v at start, want the start time %d", got, time.Now().Unix())
+		}
 		b.handle(t.Context(), uplink(uuid.New()), (&acks{}).ack)
 		if err := b.Ready(t.Context()); err != nil {
 			t.Fatalf("Ready right after start with a write in flight: %v", err)

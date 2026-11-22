@@ -137,7 +137,7 @@ func newBridge(cfg Config, log *slog.Logger, reg prometheus.Registerer) *Bridge 
 		produceSecs: prometheus.NewHistogram(prometheus.HistogramOpts{Name: "fleetwire_bridge_produce_seconds",
 			Help: "Time from MQTT receive to Kafka confirmation.", Buckets: prometheus.ExponentialBuckets(0.001, 2, 16)}),
 		lastOK: prometheus.NewGauge(prometheus.GaugeOpts{Name: "fleetwire_bridge_last_produce_timestamp_seconds",
-			Help: "Unix time of the last confirmed Kafka write."}),
+			Help: "Unix time of the last confirmed Kafka write, or of the process start before the first one."}),
 		mqtt: mqttconn.NewMetrics(reg, "fleetwire_bridge"),
 	}
 	reg.MustRegister(b.m.forwarded, b.m.pending, b.m.produceSecs, b.m.lastOK)
@@ -146,8 +146,10 @@ func newBridge(cfg Config, log *slog.Logger, reg prometheus.Registerer) *Bridge 
 	for _, r := range []string{"ok", "error", "rejected"} {
 		b.m.forwarded.WithLabelValues(r)
 	}
-	// Until the first write, readiness counts from the start.
+	// Until the first write the start time stands in: a gauge at 0 reads
+	// as a bridge that has not written since 1970.
 	b.lastOK.Store(b.started.UnixNano())
+	b.m.lastOK.Set(float64(b.started.Unix()))
 	return b
 }
 
