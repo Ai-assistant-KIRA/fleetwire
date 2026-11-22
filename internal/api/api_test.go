@@ -202,6 +202,14 @@ func TestRateLimit(t *testing.T) {
 	}
 }
 
+// A burst of 0 used to refuse every request, whatever the rate.
+func TestZeroBurstStillAllowsTheRate(t *testing.T) {
+	h := apitest.New(t, func(c *api.Config) { c.RateBurst, c.EnrollBurst = 0, 0 })
+	_, tok := h.CreateTenant("no-burst")
+	resp, body := h.Do("GET", "/v1/tenant", tok, nil)
+	h.MustJSON(resp, body, http.StatusOK, nil)
+}
+
 func TestScopesAndTokenKinds(t *testing.T) {
 	h := apitest.New(t)
 	tenant, admin := h.CreateTenant("scoped")

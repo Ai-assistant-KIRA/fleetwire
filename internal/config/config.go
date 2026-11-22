@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"reflect"
 	"strconv"
@@ -214,6 +215,11 @@ func setValue(v reflect.Value, s string) error {
 		n, err := strconv.ParseFloat(s, 64)
 		if err != nil {
 			return err
+		}
+		// ParseFloat accepts "NaN" and "Inf". NaN fails every comparison,
+		// so it would pass any range check in Validate.
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return errors.New("not a finite number")
 		}
 		v.SetFloat(n)
 	case reflect.Slice:

@@ -95,6 +95,27 @@ func TestMarkdown(t *testing.T) {
 	}
 }
 
+type ratio struct {
+	Ratio float64 `env:"T_RATIO" flag:"ratio" default:"0.5" help:"Ratio."`
+}
+
+func (r *ratio) Validate() []error {
+	if r.Ratio < 0 || r.Ratio > 1 {
+		return []error{errors.New("Ratio must be between 0 and 1")}
+	}
+	return nil
+}
+
+// NaN fails every comparison, so a range check alone lets it through.
+func TestFloatsMustBeFinite(t *testing.T) {
+	for _, v := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf", "1e400"} {
+		var c ratio
+		if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), []string{"-ratio=" + v}); err == nil {
+			t.Errorf("ratio %q loaded as %v, want an error", v, c.Ratio)
+		}
+	}
+}
+
 type Shared struct {
 	Level string `env:"T_LEVEL" flag:"level" default:"info" help:"Level."`
 }

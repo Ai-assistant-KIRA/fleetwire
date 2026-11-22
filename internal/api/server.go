@@ -88,6 +88,8 @@ func New(cfg Config, d Deps) *Server {
 	if cfg.EnrollPerSecond <= 0 {
 		cfg.EnrollPerSecond, cfg.EnrollBurst = 50, 200
 	}
+	// A bucket with no room refuses every request, whatever the rate.
+	cfg.RateBurst, cfg.EnrollBurst = max(cfg.RateBurst, 1), max(cfg.EnrollBurst, 1)
 	if cfg.EnrollTokenTTL <= 0 {
 		cfg.EnrollTokenTTL = 15 * time.Minute
 	}

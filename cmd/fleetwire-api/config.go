@@ -88,6 +88,19 @@ func (c *apiConfig) Validate() []error {
 		if c.CRLInterval <= 0 || c.CRLInterval > maxCRLInterval {
 			errs = append(errs, errors.New("FLEETWIRE_CRL_INTERVAL must be positive and at most 24h"))
 		}
+		// A bucket with no room refuses every request, whatever the rate.
+		if c.RateLimit <= 0 || c.RateBurst < 1 {
+			errs = append(errs, errors.New("FLEETWIRE_API_RATE_LIMIT must be positive and FLEETWIRE_API_RATE_BURST at least 1"))
+		}
+		if c.EnrollRateLimit <= 0 || c.EnrollRateBurst < 1 {
+			errs = append(errs, errors.New("FLEETWIRE_API_ENROLL_RATE_LIMIT must be positive and FLEETWIRE_API_ENROLL_RATE_BURST at least 1"))
+		}
+		// The enrollment-token endpoints refuse lifetimes outside this
+		// range, so a default outside it would fail every request without
+		// ttl_seconds.
+		if c.EnrollTokenTTL < time.Minute || c.EnrollTokenTTL > 24*time.Hour {
+			errs = append(errs, errors.New("FLEETWIRE_ENROLL_TOKEN_TTL must be between 1m and 24h"))
+		}
 		if c.JobWorkers < 0 {
 			errs = append(errs, errors.New("FLEETWIRE_JOB_WORKERS must not be negative"))
 		}

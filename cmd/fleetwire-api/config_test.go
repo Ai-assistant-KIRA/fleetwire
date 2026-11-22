@@ -1,9 +1,12 @@
 package main
 
 import (
+	"flag"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/config"
 )
 
 func serveConfig() apiConfig {
@@ -12,6 +15,48 @@ func serveConfig() apiConfig {
 		DeviceTrustFile: "trust.pem", DeviceCACertFile: "ca.pem", DeviceCAKeyFile: "ca-key.pem", CABundleFile: "bundle.pem",
 		DeviceBrokerURL: "tls://broker:8883", DeviceAPIURL: "https://api:8444", KeyringDir: "keys",
 		KeyringRootKeyFile: "root.key", CRLFile: "crl.pem", ExportDir: "exports", CRLInterval: 24 * time.Hour,
+		RateLimit: 20, RateBurst: 40, EnrollRateLimit: 50, EnrollRateBurst: 200, EnrollTokenTTL: 15 * time.Minute,
+	}
+}
+
+func TestServeConfigIsValid(t *testing.T) {
+	c := serveConfig()
+	if errs := c.Validate(); len(errs) != 0 {
+		t.Fatalf("serveConfig: %v", errs)
+	}
+}
+
+// Settings that would make the API refuse every request are configuration
+// errors, not a silent outage.
+func TestRateLimitsAndEnrollTTLMustBeUsable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		change func(*apiConfig)
+		want   string
+	}{
+		"rate burst 0":         {func(c *apiConfig) { c.RateBurst = 0 }, "FLEETWIRE_API_RATE_BURST"},
+		"rate limit 0":         {func(c *apiConfig) { c.RateLimit = 0 }, "FLEETWIRE_API_RATE_LIMIT"},
+		"negative rate":        {func(c *apiConfig) { c.RateLimit = -1 }, "FLEETWIRE_API_RATE_LIMIT"},
+		"enroll burst 0":       {func(c *apiConfig) { c.EnrollRateBurst = 0 }, "FLEETWIRE_API_ENROLL_RATE_BURST"},
+		"enroll rate 0":        {func(c *apiConfig) { c.EnrollRateLimit = 0 }, "FLEETWIRE_API_ENROLL_RATE_LIMIT"},
+		"enroll ttl too short": {func(c *apiConfig) { c.EnrollTokenTTL = 59 * time.Second }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
+		"enroll ttl too long":  {func(c *apiConfig) { c.EnrollTokenTTL = 25 * time.Hour }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
+	} {
+		c := serveConfig()
+		tc.change(&c)
+		errs := c.Validate()
+		if len(errs) != 1 || !strings.Contains(errs[0].Error(), tc.want) {
+			t.Errorf("%s: errors %v, want one about %s", name, errs, tc.want)
+		}
+	}
+}
+
+// NaN passes every range check, so the loader refuses it first.
+func TestNonFiniteNumbersAreRefused(t *testing.T) {
+	t.Setenv("FLEETWIRE_TRACE_SAMPLE_RATIO", "NaN")
+	t.Setenv("FLEETWIRE_API_RATE_LIMIT", "+Inf")
+	err := config.Load(&apiConfig{cmd: "serve"}, flag.NewFlagSet("x", flag.ContinueOnError), nil)
+	if err == nil || !strings.Contains(err.Error(), "FLEETWIRE_TRACE_SAMPLE_RATIO") || !strings.Contains(err.Error(), "FLEETWIRE_API_RATE_LIMIT") {
+		t.Fatalf("Load = %v, want errors for both settings", err)
 	}
 }
 
