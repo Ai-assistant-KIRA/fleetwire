@@ -27,6 +27,10 @@ the stored data is complete (R6.5).
   two ingest instances working on repeats of the same batch serialize.
 - `chunks` has `EXCLUDE USING gist (device_id WITH =, int8range(seq_lo, seq_hi, '[]') WITH &&)`,
   so overlapping chunks are impossible even if the application has a bug.
+- Seqs are `bigint`, and PostgreSQL stores `int8range(lo, hi, '[]')` as
+  `[lo, hi+1)`, so the highest seq it can store is 2^63-2. Validation
+  refuses a higher seq before the batch reaches the database, and the batch
+  goes to the dead-letter topic with reason `seq_overflow`.
 - A seq is covered exactly once in total: if a gap report arrives first, a
   later batch with the same seq is not stored; if the batch arrives first,
   only the rest of the gap is recorded.

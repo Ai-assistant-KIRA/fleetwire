@@ -83,6 +83,10 @@ func (GapReason) EnumDescriptor() ([]byte, []int) {
 //
 // Sequence numbers are not stored per reading. Reading i has seq
 // first_seq + i, so a batch always covers one unbroken seq range.
+//
+// Seqs, of readings and of gaps, go up to 2^63-2, the highest one the
+// database's bigint ranges can store. Ingest sends a batch with a higher seq
+// to the dead-letter topic with reason seq_overflow.
 type Batch struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Wire schema version. Ingest accepts only 1.
