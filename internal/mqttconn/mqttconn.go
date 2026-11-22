@@ -6,8 +6,10 @@ package mqttconn
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"time"
 
@@ -47,9 +49,11 @@ type Config struct {
 	TLS      *tls.Config
 	// SessionExpiry keeps the broker-side session (queued QoS 1 messages)
 	// for this long after a disconnect. Clean start is used only when it
-	// is zero.
+	// is zero. MQTT counts it in whole seconds, so a fraction rounds up.
 	SessionExpiry time.Duration
-	KeepAlive     time.Duration
+	// KeepAlive is the MQTT keep alive (default 30 s), in whole seconds
+	// like SessionExpiry.
+	KeepAlive time.Duration
 	// ReceiveMaximum caps unacknowledged messages the broker sends us.
 	// Zero means DefaultReceiveMaximum, never the protocol's 65,535: paho
 	// allocates a channel of that many packets per connection.
@@ -75,6 +79,23 @@ type Config struct {
 // 10,000 devices, which receive only a few acks at a time.
 const DefaultReceiveMaximum = 64
 
+// seconds converts d to the whole seconds of an MQTT field that holds at
+// most limit. A fraction of a second rounds up, never down to 0: for keep
+// alive and session expiry 0 means off.
+func seconds(name string, d time.Duration, limit uint64) (uint64, error) {
+	if d < 0 {
+		return 0, fmt.Errorf("mqtt %s %v is negative", name, d)
+	}
+	n := uint64(d / time.Second)
+	if d%time.Second != 0 {
+		n++
+	}
+	if n > limit {
+		return 0, fmt.Errorf("mqtt %s %v is above the protocol limit of %d s", name, d, limit)
+	}
+	return n, nil
+}
+
 // Start begins connecting and keeps reconnecting until ctx ends.
 func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error) {
 	u, err := url.Parse(cfg.URL)
@@ -84,6 +105,11 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 	if cfg.KeepAlive == 0 {
 		cfg.KeepAlive = 30 * time.Second
 	}
+	keepAlive, kerr := seconds("keep alive", cfg.KeepAlive, math.MaxUint16)
+	expiry, eerr := seconds("session expiry", cfg.SessionExpiry, math.MaxUint32)
+	if err := errors.Join(kerr, eerr); err != nil {
+		return nil, err
+	}
 	if cfg.Backoff.Base == 0 {
 		cfg.Backoff = backoff.Backoff{Base: time.Second, Max: time.Minute}
 	}
@@ -92,13 +118,12 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 		log = slog.New(slog.DiscardHandler)
 	}
 	m := cfg.Metrics
-	expiry := uint32(cfg.SessionExpiry / time.Second)
 	ac := autopaho.ClientConfig{
 		ServerUrls:                    []*url.URL{u},
 		TlsCfg:                        cfg.TLS,
-		KeepAlive:                     uint16(cfg.KeepAlive / time.Second),
+		KeepAlive:                     uint16(keepAlive),
 		CleanStartOnInitialConnection: expiry == 0,
-		SessionExpiryInterval:         expiry,
+		SessionExpiryInterval:         uint32(expiry),
 		ConnectTimeout:                20 * time.Second,
 		ReconnectBackoff:              cfg.Backoff.Delay,
 		ConnectPacketBuilder:          connectPacket(cfg.ReceiveMaximum),
