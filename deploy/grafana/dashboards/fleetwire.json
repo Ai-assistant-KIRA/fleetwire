@@ -761,7 +761,7 @@
     {
       "type": "timeseries",
       "title": "CRL age",
-      "description": "Alert at 48 h; OpenSSL rejects every device after 7 days.",
+      "description": "Alert at 48 h; OpenSSL rejects every device after 7 days. A replica that has not published since it started is left out; with none published the panel is empty.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -784,7 +784,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "min(fleetwire_crl_age_seconds)",
+          "expr": "min(fleetwire_crl_age_seconds < 1e9)",
           "legendFormat": "age"
         }
       ],
