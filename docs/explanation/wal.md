@@ -50,7 +50,9 @@ lost in a power cut was never sent, so its seq can be reused safely.
 
 `state.json` is replaced atomically (temp file, fsync, rename, fsync of the
 directory). A corrupt state file stops the agent with a clear error rather
-than guessing, because starting from zero could reuse seqs.
+than guessing, because starting from zero could reuse seqs;
+[Recover a device's local log](../how-to/recover-device-state.md) has the
+repair.
 
 ## Disk budget
 

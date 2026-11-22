@@ -19,6 +19,7 @@ tutorial/run-a-fleet
 :maxdepth: 1
 
 how-to/enroll-a-device
+how-to/recover-device-state
 how-to/operate
 how-to/run-failure-tests
 how-to/run-on-ubuntu-core

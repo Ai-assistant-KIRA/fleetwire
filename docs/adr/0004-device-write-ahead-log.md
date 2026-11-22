@@ -60,8 +60,8 @@ flash storage, where every fsync costs wear and latency.
 - Recovery reads the whole log at start (at most the 256 MiB budget).
 - A corrupt `state.json` stops the agent with a clear error instead of
   guessing, because starting from zero state could reuse seqs before the
-  server's watermark is known. This is an operator action, documented in the
-  how-to guides.
+  server's watermark is known. This is an operator action:
+  [Recover a device's local log](../how-to/recover-device-state.md).
 - Tests: torn tail at every byte (P3), bit flips in middle segments, budget
   gaps, deletion bounded by the persisted ack (P4), and a property test that
   mixes appends, sends, acks, checkpoints, power cuts and restarts and checks
