@@ -115,7 +115,15 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 		if f.env != "" {
 			usage += " (env " + f.env + ")"
 		}
-		rv := &rawValue{s: raw[f.name], isBool: f.value.Kind() == reflect.Bool}
+		// flag.Var records the starting value as the default that -h and
+		// every flag error print to stderr. Start from the tag default, not
+		// the environment, so a secret set in the environment is never
+		// printed; the environment still applies through raw.
+		start := f.def
+		if f.secret {
+			start = ""
+		}
+		rv := &rawValue{s: start, isBool: f.value.Kind() == reflect.Bool}
 		flagVals[f.name] = rv
 		fs.Var(rv, f.flag, usage)
 	}

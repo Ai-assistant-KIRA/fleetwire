@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"strings"
@@ -57,6 +58,28 @@ func TestReportsEveryProblemAndRedactsSecrets(t *testing.T) {
 	err = Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil)
 	if err == nil || strings.Contains(err.Error(), "s3cr3t") {
 		t.Fatalf("error leaks or is missing: %v", err)
+	}
+}
+
+// The flag package prints every flag's default on -h and after a bad flag.
+// Values from the environment must not show up there.
+func TestHelpAndFlagErrorsDoNotShowEnvironmentValues(t *testing.T) {
+	t.Setenv("T_URL", "postgres://app:s3cr3t@db/fleetwire")
+	t.Setenv("T_WORKERS", "8")
+	for _, args := range [][]string{{"-h"}, {"-no-such-flag"}, {"-workers"}} {
+		var out bytes.Buffer
+		fs := flag.NewFlagSet("x", flag.ContinueOnError)
+		fs.SetOutput(&out)
+		err := Load(&sample{}, fs, args)
+		if err == nil {
+			t.Fatalf("Load(%v) succeeded, want a flag error", args)
+		}
+		if text := out.String() + err.Error(); strings.Contains(text, "s3cr3t") || strings.Contains(text, "default 8") {
+			t.Errorf("Load(%v) printed an environment value:\n%s", args, text)
+		}
+		if !strings.Contains(out.String(), "(default 4)") {
+			t.Errorf("Load(%v) usage misses the tag default:\n%s", args, out.String())
+		}
 	}
 }
 
