@@ -1,12 +1,38 @@
-// Package fsutil writes files so that a crash or power cut leaves either
-// the old content or the new, never a mix.
+// Package fsutil holds the file operations that need care: writes that a
+// crash or power cut leaves either old or new, never a mix, and reads of
+// files that hold secrets.
 package fsutil
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
+
+// ReadPrivate reads a file that holds a secret. It refuses a file its group
+// or other users can access, so a key or password on a misconfigured mount
+// fails at start instead of being used. The mode is checked on the opened
+// file, so the file read is the file checked.
+func ReadPrivate(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return nil, fmt.Errorf("%s has mode %#o; it must not be accessible by group or others (use 0400 or 0600)", path, perm)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return data, nil
+}
 
 // WriteAtomic replaces path with data: write a temp file in the same
 // directory, fsync it, rename it over path, fsync the directory.

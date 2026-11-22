@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -88,7 +90,7 @@ func TestMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"`T_URL`", "`-interval`", "`10s`", "Secret: never logged."} {
+	for _, want := range []string{"`T_URL`", "`-interval`", "`10s`", "Secret: never logged.", "`T_URL_FILE`"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown misses %s:\n%s", want, md)
 		}
@@ -134,5 +136,102 @@ func TestEmbeddedStructsAndEmptyEnv(t *testing.T) {
 	}
 	if c.Level != "debug" || c.Name != "x" {
 		t.Fatalf("loaded %+v: embedded field not read, or empty env replaced the default", c)
+	}
+}
+
+func writeFile(t *testing.T, content string, perm os.FileMode) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(path, []byte(content), perm); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile's mode passes through the umask; set it exactly.
+	if err := os.Chmod(path, perm); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestSecretsCanComeFromFiles(t *testing.T) {
+	for content, want := range map[string]string{
+		"postgres://app:s3cr3t@db/fw":       "postgres://app:s3cr3t@db/fw",
+		"postgres://app:s3cr3t@db/fw\n":     "postgres://app:s3cr3t@db/fw",
+		"postgres://app:s3cr3t@db/fw\r\n":   "postgres://app:s3cr3t@db/fw",
+		"postgres://app:s3cr3t@db/fw\n\n":   "postgres://app:s3cr3t@db/fw\n",
+		" postgres://app:s3cr3t@db/fw \n":   " postgres://app:s3cr3t@db/fw ",
+		"postgres://app:s3cr3t@db/fw\n\r\n": "postgres://app:s3cr3t@db/fw\n",
+	} {
+		t.Setenv("T_URL_FILE", writeFile(t, content, 0o600))
+		var c sample
+		if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil); err != nil {
+			t.Fatalf("Load with file %q: %v", content, err)
+		}
+		if c.URL != want {
+			t.Errorf("file %q loaded as %q, want %q", content, c.URL, want)
+		}
+	}
+	// A flag still wins over the file.
+	var c sample
+	if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), []string{"-url=postgres://flag"}); err != nil {
+		t.Fatal(err)
+	}
+	if c.URL != "postgres://flag" {
+		t.Errorf("URL = %q, want the flag's value", c.URL)
+	}
+}
+
+func TestSecretFileProblemsAreReportedWithoutTheSecret(t *testing.T) {
+	const secret = "postgres://app:s3cr3t@db/fw"
+	cases := map[string]func(t *testing.T){
+		"group-readable": func(t *testing.T) { t.Setenv("T_URL_FILE", writeFile(t, secret, 0o640)) },
+		"world-readable": func(t *testing.T) { t.Setenv("T_URL_FILE", writeFile(t, secret, 0o604)) },
+		"missing":        func(t *testing.T) { t.Setenv("T_URL_FILE", filepath.Join(t.TempDir(), "absent")) },
+		"empty":          func(t *testing.T) { t.Setenv("T_URL_FILE", writeFile(t, "\n", 0o400)) },
+		"both set": func(t *testing.T) {
+			t.Setenv("T_URL", secret)
+			t.Setenv("T_URL_FILE", writeFile(t, secret, 0o400))
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			setup(t)
+			var c sample
+			err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil)
+			if err == nil {
+				t.Fatalf("Load succeeded with URL %q", c.URL)
+			}
+			if !strings.Contains(err.Error(), "T_URL_FILE") || strings.Contains(err.Error(), "s3cr3t") {
+				t.Errorf("error does not name T_URL_FILE or shows the secret: %v", err)
+			}
+		})
+	}
+}
+
+// Only secrets read files: a _FILE variable for another field is ignored.
+func TestOnlySecretsReadFiles(t *testing.T) {
+	t.Setenv("T_URL", "postgres://env")
+	t.Setenv("T_WORKERS_FILE", writeFile(t, "9", 0o600))
+	var c sample
+	if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil); err != nil {
+		t.Fatal(err)
+	}
+	if c.Workers != 4 {
+		t.Errorf("Workers = %d, want the default 4", c.Workers)
+	}
+}
+
+func TestHelpDoesNotShowSecretFiles(t *testing.T) {
+	t.Setenv("T_URL_FILE", writeFile(t, "postgres://app:s3cr3t@db/fw", 0o600))
+	var out bytes.Buffer
+	fs := flag.NewFlagSet("x", flag.ContinueOnError)
+	fs.SetOutput(&out)
+	if err := Load(&sample{}, fs, []string{"-h"}); err == nil {
+		t.Fatal("Load(-h) succeeded")
+	}
+	if strings.Contains(out.String(), "s3cr3t") {
+		t.Errorf("-h printed the secret:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "env T_URL or T_URL_FILE") {
+		t.Errorf("-h does not mention T_URL_FILE:\n%s", out.String())
 	}
 }

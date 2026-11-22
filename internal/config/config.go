@@ -7,6 +7,13 @@
 // stopping at the first, because a service that fails on one setting at a
 // time costs an operator one restart per typo.
 //
+// A field tagged secret:"true" can also be read from a file: FOO_FILE names
+// the file that holds FOO's value. Orchestrators show environment variables
+// to anyone who can read the service definition (Pebble plans, `docker
+// inspect`), and a file keeps the secret out of it. The file must not be
+// accessible by group or others, one trailing newline is removed, and
+// setting both FOO and FOO_FILE is an error.
+//
 //	type Config struct {
 //	    DatabaseURL string        `env:"FLEETWIRE_DATABASE_URL" flag:"database-url" required:"true" secret:"true" help:"..."`
 //	    Interval    time.Duration `env:"FLEETWIRE_INTERVAL" flag:"interval" default:"10s" help:"..."`
@@ -23,7 +30,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/fsutil"
 )
+
+// FileSuffix turns a secret's variable name into the name of the variable
+// that holds the path of a file with its value.
+const FileSuffix = "_FILE"
 
 // Errors collects every problem found while loading.
 type Errors []error
@@ -97,14 +110,34 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 	}
 	raw := make(map[string]string, len(fl))
 	set := make(map[string]bool, len(fl))
+	var errs Errors
 	for _, f := range fl {
 		if f.def != "" {
 			raw[f.name] = f.def
 		}
+		if f.env == "" {
+			continue
+		}
 		// An empty variable counts as unset, so `FOO=` in a Compose file
 		// or a shell does not wipe out a default.
-		if v := os.Getenv(f.env); v != "" && f.env != "" {
+		v := os.Getenv(f.env)
+		if v != "" {
 			raw[f.name], set[f.name] = v, true
+		}
+		if !f.secret {
+			continue
+		}
+		if path := os.Getenv(f.env + FileSuffix); path != "" {
+			if v != "" {
+				errs = append(errs, fmt.Errorf("%s: set %s or %s%s, not both", f.name, f.env, f.env, FileSuffix))
+				continue
+			}
+			s, err := readSecretFile(path)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s (env %s%s): %w", f.name, f.env, FileSuffix, err))
+				continue
+			}
+			raw[f.name], set[f.name] = s, true
 		}
 	}
 	flagVals := map[string]*rawValue{}
@@ -114,7 +147,7 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 		}
 		usage := f.help
 		if f.env != "" {
-			usage += " (env " + f.env + ")"
+			usage += " (env " + envNames(f) + ")"
 		}
 		// flag.Var records the starting value as the default that -h and
 		// every flag error print to stderr. Start from the tag default, not
@@ -139,12 +172,11 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 		}
 	})
 
-	var errs Errors
 	for _, f := range fl {
 		s, ok := raw[f.name]
 		if !ok || s == "" {
 			if f.required {
-				errs = append(errs, fmt.Errorf("%s is required (env %s, flag -%s)", f.name, f.env, f.flag))
+				errs = append(errs, fmt.Errorf("%s is required (env %s, flag -%s)", f.name, envNames(f), f.flag))
 			}
 			continue
 		}
@@ -163,6 +195,34 @@ func Load(cfg any, fs *flag.FlagSet, args []string) error {
 		return errs
 	}
 	return nil
+}
+
+// envNames lists the variables a field is read from.
+func envNames(f field) string {
+	if f.secret {
+		return f.env + " or " + f.env + FileSuffix
+	}
+	return f.env
+}
+
+// readSecretFile returns a secret file's content without one trailing
+// newline, which editors and `echo` add. Errors name the file, never its
+// content.
+func readSecretFile(path string) (string, error) {
+	data, err := fsutil.ReadPrivate(path)
+	if err != nil {
+		return "", err
+	}
+	s := string(data)
+	if t, ok := strings.CutSuffix(s, "\r\n"); ok {
+		s = t
+	} else {
+		s = strings.TrimSuffix(s, "\n")
+	}
+	if s == "" {
+		return "", fmt.Errorf("%s is empty", path)
+	}
+	return s, nil
 }
 
 // rawValue keeps a flag's text; parsing happens later so that every error
@@ -258,7 +318,7 @@ func Markdown(cfg any) (string, error) {
 		}
 		help := f.help
 		if f.secret {
-			help += " Secret: never logged."
+			help += " Secret: never logged. `" + f.env + FileSuffix + "` can name a file to read it from instead."
 		}
 		fmt.Fprintf(&b, "| `%s` | `-%s` | `%s` | %s | %s |\n", f.env, f.flag, def, req, help)
 	}

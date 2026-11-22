@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/crypto/envelope"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/fsutil"
 )
 
 // Keyring wraps and unwraps tenant data keys.
@@ -50,14 +51,7 @@ const RootKeySize = 32
 // LoadRootKey reads the 32-byte root key. The file must not be readable by
 // group or others, so a misconfigured mount fails loudly at start.
 func LoadRootKey(path string) ([]byte, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("keyring root key: %w", err)
-	}
-	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		return nil, fmt.Errorf("keyring root key %s has mode %#o; it must not be accessible by group or others (use 0400)", path, perm)
-	}
-	key, err := os.ReadFile(path)
+	key, err := fsutil.ReadPrivate(path)
 	if err != nil {
 		return nil, fmt.Errorf("keyring root key: %w", err)
 	}
