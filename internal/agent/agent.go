@@ -282,11 +282,13 @@ func (d *Device) connectAndSend(ctx context.Context) error {
 
 	connCtx, stopConn := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopConn()
+	redial := &mqttconn.Redialer{}
 	cm, err := mqttconn.Start(connCtx, mqttconn.Config{
 		URL: broker, ClientID: info.DeviceID.String(), TLS: d.id.ClientTLS(u.Hostname()),
 		SessionExpiry: time.Hour, KeepAlive: 30 * time.Second,
-		Backoff: backoff.Backoff{Base: time.Second, Max: time.Minute},
-		Logger:  d.lg, Metrics: d.opts.Metrics.MQTT,
+		Backoff:  backoff.Backoff{Base: time.Second, Max: time.Minute},
+		Redialer: redial,
+		Logger:   d.lg, Metrics: d.opts.Metrics.MQTT,
 		OnUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			// OnUp must not block, so the subscription runs on its own.
 			go d.subscribe(connCtx, cm, ackTopic)
@@ -314,7 +316,7 @@ func (d *Device) connectAndSend(ctx context.Context) error {
 	var wg sync.WaitGroup
 	upDone := make(chan error, 1)
 	go func() { upDone <- d.up.Run(upCtx) }()
-	wg.Go(func() { d.renewLoop(connCtx) })
+	wg.Go(func() { d.renewLoop(connCtx, redial.Drop) })
 
 	<-ctx.Done()
 	// Shutdown order: collecting stops in Run; here the uplink stops and
@@ -355,7 +357,12 @@ func (d *Device) subscribe(ctx context.Context, cm *autopaho.ConnectionManager, 
 	}
 }
 
-func (d *Device) renewLoop(ctx context.Context) {
+// renewLoop renews the certificate two thirds into its life, then calls
+// reconnect: TLS presents the client certificate only in the handshake, so
+// the open connection keeps using the old one until it drops. Reconnecting
+// at once puts the new certificate in use while the old one is still
+// valid, and shows right away whether the broker accepts it.
+func (d *Device) renewLoop(ctx context.Context, reconnect func() bool) {
 	b := backoff.Backoff{Base: time.Minute, Max: time.Hour}
 	for attempt := 0; ctx.Err() == nil; {
 		leaf := d.id.Leaf()
@@ -379,7 +386,8 @@ func (d *Device) renewLoop(ctx context.Context) {
 		err := d.id.Renew(ctx)
 		if err == nil {
 			d.opts.Metrics.Renewals.WithLabelValues("ok").Inc()
-			d.lg.Info("certificate renewed", "not_after", d.id.Leaf().NotAfter)
+			dropped := reconnect()
+			d.lg.Info("certificate renewed", "not_after", d.id.Leaf().NotAfter, "reconnecting", dropped)
 			attempt = 0
 			continue
 		}

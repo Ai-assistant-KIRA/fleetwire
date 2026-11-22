@@ -1,12 +1,18 @@
 package mqttconn
 
 import (
+	"context"
 	"math"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
+
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/backoff"
 )
 
 // MQTT carries keep alive and session expiry in whole seconds, and 0 turns
@@ -51,6 +57,84 @@ func TestStartRefusesDurationsMQTTCannotCarry(t *testing.T) {
 			t.Errorf("Start accepted keep alive %v, session expiry %v", cfg.KeepAlive, cfg.SessionExpiry)
 		}
 	}
+}
+
+// serveMQTT is just enough of a broker for a client to connect and stay
+// connected: CONNACK, PINGRESP, nothing else.
+func serveMQTT(c net.Conn) {
+	defer c.Close()
+	for {
+		p, err := packets.ReadPacket(c)
+		if err != nil {
+			return
+		}
+		var reply *packets.ControlPacket
+		switch p.Type {
+		case packets.CONNECT:
+			reply = packets.NewControlPacket(packets.CONNACK)
+		case packets.PINGREQ:
+			reply = packets.NewControlPacket(packets.PINGRESP)
+		case packets.DISCONNECT:
+			return
+		}
+		if reply != nil {
+			if _, err := reply.WriteTo(c); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// Drop closes the live connection, and autopaho connects again on its own:
+// a new TCP connection, and with TLS a new handshake.
+func TestRedialerDropsTheConnectionAndAutopahoReconnects(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan struct{}, 8)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- struct{}{}
+			go serveMQTT(c)
+		}
+	}()
+	up, down := make(chan struct{}, 8), make(chan struct{}, 8)
+	r := &Redialer{}
+	if r.Drop() {
+		t.Fatal("Drop reported a connection before any was made")
+	}
+	cm, err := Start(t.Context(), Config{
+		URL: "mqtt://" + ln.Addr().String(), ClientID: "redial-test", Redialer: r,
+		Backoff: backoff.Backoff{Base: time.Millisecond, Max: time.Millisecond},
+		OnUp:    func(*autopaho.ConnectionManager, *paho.Connack) { up <- struct{}{} },
+		OnDown:  func() { down <- struct{}{} },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cm.Disconnect(context.Background()) }()
+	wait := func(ch chan struct{}, what string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(10 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+	wait(accepted, "the first connection")
+	wait(up, "the first connection to come up")
+	if !r.Drop() {
+		t.Fatal("Drop found no connection to close")
+	}
+	wait(down, "the connection to go down")
+	wait(accepted, "a new connection")
+	wait(up, "the new connection to come up")
 }
 
 // A service certificate must not be offered over a connection autopaho

@@ -10,14 +10,19 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/url"
+	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/packets"
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/net/proxy"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/backoff"
 )
@@ -71,8 +76,92 @@ type Config struct {
 	OnDown func()
 	// OnPublish receives messages.
 	OnPublish func(paho.PublishReceived) (bool, error)
-	Logger    *slog.Logger
-	Metrics   *Metrics
+	// Redialer, if set, lets the caller drop the connection on purpose.
+	Redialer *Redialer
+	Logger   *slog.Logger
+	Metrics  *Metrics
+}
+
+// Redialer lets the caller close the current network connection, so that
+// autopaho reconnects, resuming the persistent session, through a new TLS
+// handshake. TLS sends the client certificate only in the handshake, so
+// the agent uses it after a certificate renewal.
+type Redialer struct {
+	mu   sync.Mutex
+	conn net.Conn
+}
+
+// Drop closes the current connection and reports whether there was one.
+// autopaho then reconnects as after any lost connection.
+func (r *Redialer) Drop() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.conn == nil {
+		return false
+	}
+	_ = r.conn.Close()
+	r.conn = nil
+	return true
+}
+
+// dial connects the way autopaho v0.23.0 does for TCP and TLS URLs
+// (autopaho/net.go), all_proxy included, and keeps the connection for
+// Drop. autopaho passes no deadline, so ConnectTimeout is applied here.
+func (r *Redialer) dial(ctx context.Context, cc autopaho.ClientConfig, u *url.URL) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, cc.ConnectTimeout)
+	defer cancel()
+	var conn net.Conn
+	var err error
+	switch scheme := strings.ToLower(u.Scheme); {
+	case slices.Contains(tlsSchemes, scheme):
+		conn, err = dialTLS(ctx, cc.TlsCfg, u.Host)
+	case scheme == "mqtt", scheme == "tcp", scheme == "":
+		conn, err = dialTCP(ctx, u.Host)
+	default:
+		return nil, fmt.Errorf("unsupported scheme %q in %s", u.Scheme, u.Redacted())
+	}
+	if err != nil {
+		return nil, err
+	}
+	// paho writes from several goroutines; tls.Conn is not safe for that.
+	conn = packets.NewThreadSafeConn(conn)
+	r.mu.Lock()
+	r.conn = conn
+	r.mu.Unlock()
+	return conn, nil
+}
+
+func dialTCP(ctx context.Context, addr string) (net.Conn, error) {
+	if os.Getenv("all_proxy") != "" {
+		return proxy.Dial(ctx, "tcp", addr)
+	}
+	var d net.Dialer
+	return d.DialContext(ctx, "tcp", addr)
+}
+
+func dialTLS(ctx context.Context, cfg *tls.Config, addr string) (net.Conn, error) {
+	if os.Getenv("all_proxy") == "" {
+		d := tls.Dialer{Config: cfg}
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	raw, err := proxy.Dial(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	// tls.Dialer fills in the server name; tls.Client does not.
+	cfg = cfg.Clone()
+	if cfg == nil {
+		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	if cfg.ServerName == "" {
+		cfg.ServerName, _, _ = net.SplitHostPort(addr)
+	}
+	c := tls.Client(raw, cfg)
+	if err := c.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return c, nil
 }
 
 // DefaultReceiveMaximum is sent when a Config sets none. paho.golang sizes
@@ -189,6 +278,9 @@ func Start(ctx context.Context, cfg Config) (*autopaho.ConnectionManager, error)
 	}
 	if cfg.OnPublish != nil {
 		ac.OnPublishReceived = []func(paho.PublishReceived) (bool, error){cfg.OnPublish}
+	}
+	if cfg.Redialer != nil {
+		ac.AttemptConnection = cfg.Redialer.dial
 	}
 	cm, err := autopaho.NewConnection(ctx, ac)
 	if err != nil {
