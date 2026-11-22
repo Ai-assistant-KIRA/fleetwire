@@ -59,6 +59,10 @@ type processor interface {
 	Process(ctx context.Context, device uuid.UUID, payload []byte, receivedAt time.Time) (Outcome, error)
 }
 
+// ackReleaseWait bounds how long a rebalance or shutdown waits for the acks
+// of the partitions being given up. It matches the shutdown drain.
+const ackReleaseWait = 5 * time.Second
+
 // Service consumes Kafka and stores batches.
 type Service struct {
 	cfg    Config
@@ -115,6 +119,16 @@ func New(cfg Config, db *store.DB, keys *tenantkey.Manager, log *slog.Logger, re
 		kgo.SessionTimeout(30*time.Second),
 		kgo.RebalanceTimeout(5*time.Minute),
 		kgo.RequiredAcks(kgo.AllISRAcks()),
+		// The acks of partitions this instance gives up go out, or are
+		// dropped, before their next owner starts, so its acks are never
+		// overwritten by older ones from here (see AckPublisher). Offsets
+		// need nothing here: they are committed after each poll.
+		kgo.OnPartitionsRevoked(func(_ context.Context, _ *kgo.Client, revoked map[string][]int32) {
+			s.acks.Release(revoked[cfg.Topic], ackReleaseWait)
+		}),
+		kgo.OnPartitionsLost(func(_ context.Context, _ *kgo.Client, lost map[string][]int32) {
+			s.acks.Release(lost[cfg.Topic], 0)
+		}),
 	)
 	cl, err := kgo.NewClient(opts...)
 	if err != nil {
@@ -290,7 +304,7 @@ func (s *Service) handle(ctx context.Context, r *kgo.Record) error {
 			}
 			s.m.Batches.WithLabelValues(string(out.Result)).Inc()
 			if out.Ack {
-				s.acks.Offer(trace.SpanContextFromContext(pctx), device, out.AckThrough)
+				s.acks.Offer(trace.SpanContextFromContext(pctx), device, r.Partition, out.AckThrough)
 			}
 			return nil
 		}
