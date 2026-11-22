@@ -32,3 +32,12 @@ into RFC 9457 problem details, so every error has the same shape.
 - No third-party router to update or audit.
 - Route metrics use the pattern (`GET /v1/devices/{id}`), never the raw path,
   so cardinality stays bounded.
+
+## Note, 2026-11-22
+
+The API now has four listeners. The fourth, the keyring listener for
+ingest (off by default, `:8445` on Kubernetes), came later with the remote
+keyring of ADR-0007. It serves two routes from `internal/crypto/keyring`
+on a mux of its own, behind mutual TLS and an allowlist of client
+certificate names instead of the middleware chain above
+([listeners](../reference/api.md#listeners)).
