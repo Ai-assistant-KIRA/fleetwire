@@ -72,9 +72,12 @@ the host matter:
   device fsyncs its log and its state file, as a real device does on its
   own disk; on one machine thousands of them share one disk with
   PostgreSQL's commit flushes. At 10,000 devices on the test VM, ingest
-  stored 770 readings/s of the 1,000/s offered with the state on disk, and
-  kept up (1,066/s while it drained the backlog) with the state on tmpfs.
-  The table records which (the "Device state" line):
+  stored about 770 readings/s of the 1,000/s offered with the state on
+  disk. With the state on tmpfs it stored every reading once, but the VM
+  was still saturated: 870 to 990 readings/s in the steady minute before
+  each fault, a p99 delay of about 30 s, and recovery times of minutes
+  ([table](../results/2026-11-10T030712Z-add94424b241.md)). The table
+  records where the state was (the "Device state" line):
 
   ```console
   $ sudo mkdir -p /mnt/fw-devices && sudo mount -t tmpfs -o size=1g,mode=0700 tmpfs /mnt/fw-devices
