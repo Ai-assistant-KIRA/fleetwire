@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net/url"
 	"time"
 )
 
@@ -87,6 +88,16 @@ func (c *apiConfig) Validate() []error {
 		need(c.ExportDir, "FLEETWIRE_EXPORT_DIR")
 		if c.InternalListen != "" {
 			need(c.ServiceTrustFile, "FLEETWIRE_SERVICE_TRUST_FILE (with FLEETWIRE_API_INTERNAL_LISTEN)")
+		}
+		// Devices use these URLs as sent at enrollment, so a plaintext
+		// scheme here would reach every device. The agent applies the same
+		// rules to its own overrides.
+		if u, err := url.Parse(c.DeviceBrokerURL); c.DeviceBrokerURL != "" &&
+			(err != nil || (u.Scheme != "tls" && u.Scheme != "mqtts" && u.Scheme != "ssl") || u.Port() == "") {
+			errs = append(errs, errors.New("FLEETWIRE_DEVICE_BROKER_URL must look like tls://host:port"))
+		}
+		if u, err := url.Parse(c.DeviceAPIURL); c.DeviceAPIURL != "" && (err != nil || u.Scheme != "https" || u.Host == "") {
+			errs = append(errs, errors.New("FLEETWIRE_DEVICE_API_URL must be an https:// URL"))
 		}
 		if c.CRLInterval <= 0 || c.CRLInterval > maxCRLInterval {
 			errs = append(errs, errors.New("FLEETWIRE_CRL_INTERVAL must be positive and at most 24h"))

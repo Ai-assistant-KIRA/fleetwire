@@ -44,6 +44,9 @@ func TestRateLimitsAndEnrollTTLMustBeUsable(t *testing.T) {
 		"enroll ttl too short": {func(c *apiConfig) { c.EnrollTokenTTL = 59 * time.Second }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
 		"enroll ttl too long":  {func(c *apiConfig) { c.EnrollTokenTTL = 25 * time.Hour }, "FLEETWIRE_ENROLL_TOKEN_TTL"},
 		"no active exports":    {func(c *apiConfig) { c.MaxActiveExports = 0 }, "FLEETWIRE_API_MAX_ACTIVE_EXPORTS"},
+		"plaintext broker":     {func(c *apiConfig) { c.DeviceBrokerURL = "mqtt://broker:1883" }, "FLEETWIRE_DEVICE_BROKER_URL"},
+		"broker without port":  {func(c *apiConfig) { c.DeviceBrokerURL = "tls://broker" }, "FLEETWIRE_DEVICE_BROKER_URL"},
+		"plaintext device api": {func(c *apiConfig) { c.DeviceAPIURL = "http://api:8444" }, "FLEETWIRE_DEVICE_API_URL"},
 	} {
 		c := serveConfig()
 		tc.change(&c)
