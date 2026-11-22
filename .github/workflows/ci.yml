@@ -7,9 +7,13 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request supersedes its older run. Every other run
+# (main, a tag release calling this workflow) gets a group of its own: one
+# shared group would cancel a pending main run when the next commit lands,
+# leaving that commit untested.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   go:
