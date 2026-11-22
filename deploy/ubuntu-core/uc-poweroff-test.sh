@@ -87,7 +87,7 @@ cat > "$out.md" <<EOF
 - Host: $(nproc) vCPU $(cpu_model), $(free -g | awk '/Mem:/ {print $2}') GiB RAM, QEMU accel $([ -w /dev/kvm ] && echo kvm || echo tcg)
 - Guest: $guest; snap fleetwire-agent $snap
 - Command: \`RESETS=$N deploy/ubuntu-core/uc-poweroff-test.sh\` (written by the script)
-- Load: one reading every 200 ms, \`wal.sync=interval\` (1 s); QMP \`system_reset\` $N times, 5 to 30 s after the guest was reachable again; $minutes minutes in all
+- Load: a collection every 200 ms, 11 readings each (cpu 1, memory 3, load 3, uptime 1, disk 3) plus one per thermal zone, \`wal.sync=interval\` (1 s); QMP \`system_reset\` $N times, 5 to 30 s after the guest was reachable again; $minutes minutes in all
 
 | Device | Resets | Last seq | Acked | Reported gaps | Checker | Result |
 |---|---:|---:|---:|---|---|---|
