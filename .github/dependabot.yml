@@ -11,6 +11,17 @@ updates:
   - package-ecosystem: pip
     directories: ["/charms/*", "/docs"]
     schedule: {interval: weekly}
+  # The service images (root Dockerfile) and the release images
+  # (deploy/release/Dockerfile) share the distroless base; both pin digests.
   - package-ecosystem: docker
-    directory: /
+    directories: ["/", "/deploy/release"]
     schedule: {interval: weekly}
+  # The development stack's third-party images.
+  - package-ecosystem: docker-compose
+    directory: /deploy/compose
+    schedule: {interval: weekly}
+    ignore:
+      # A new PostgreSQL major cannot open the old data volume; that upgrade
+      # needs pg_upgrade or a dump, not a tag change.
+      - dependency-name: postgres
+        update-types: ["version-update:semver-major"]
