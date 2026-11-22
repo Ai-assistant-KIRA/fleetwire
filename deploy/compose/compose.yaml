@@ -6,7 +6,17 @@
 # that path; services use Mosquitto's internal service listener.
 name: fleetwire
 
+# Containers start without Linux capabilities and cannot gain privileges
+# through setuid binaries. Those that allow it also get a read-only root
+# filesystem with a tmpfs /tmp; what a service keeps goes to its volumes.
+x-hardened: &hardened
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  read_only: true
+  tmpfs: [/tmp]
+
 x-service: &service
+  <<: *hardened
   build:
     context: ../..
     dockerfile: Dockerfile
@@ -48,6 +58,10 @@ x-kafka-env: &kafka-env
 
 x-kafka: &kafka
   image: apache/kafka:4.1.0
+  # No read-only root: the image writes the broker configuration it
+  # generates from the environment into /opt/kafka/config at start.
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
   restart: unless-stopped
   networks: [fleetwire]
   # The check asks the broker for its API versions, so "healthy" means it
@@ -71,7 +85,12 @@ x-mqtt-env: &mqtt-env
 
 services:
   postgres:
+    <<: *hardened
     image: postgres:16-alpine
+    # The entrypoint starts as root, gives the data directory to the postgres
+    # user and switches to it; these are the capabilities that takes.
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+    tmpfs: [/tmp, /var/run/postgresql]
     restart: unless-stopped
     networks: [fleetwire]
     environment:
@@ -118,6 +137,7 @@ services:
     volumes: [kafka-3:/var/lib/kafka]
 
   mosquitto:
+    <<: *hardened
     image: eclipse-mosquitto:2.1.2-alpine
     restart: unless-stopped
     networks: [fleetwire]
@@ -140,12 +160,20 @@ services:
       retries: 20
 
   toxiproxy:
+    <<: *hardened
     image: ghcr.io/shopify/toxiproxy:2.12.0
     restart: unless-stopped
     networks: [fleetwire]
     command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
     volumes: [./toxiproxy.json:/config/toxiproxy.json:ro]
     ports: ["127.0.0.1:18883:18883", "127.0.0.1:8474:8474"]
+    # Healthy once the API answers and the mqtt proxy exists, also while the
+    # chaos runner has it disabled. The image has only the two binaries.
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "inspect", "mqtt"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     depends_on:
       mosquitto: {condition: service_healthy}
 
@@ -260,6 +288,7 @@ services:
     ports: ["127.0.0.1:9112:9090"]
 
   prometheus:
+    <<: *hardened
     image: prom/prometheus:v3.7.3
     restart: unless-stopped
     networks: [fleetwire]
@@ -270,7 +299,11 @@ services:
     ports: ["127.0.0.1:9090:9090"]
 
   grafana:
+    <<: *hardened
     image: grafana/grafana:12.2.1
+    # Grafana keeps its database in /var/lib/grafana. Everything in it comes
+    # from provisioning and the environment, so a tmpfs is enough.
+    tmpfs: [/tmp, /var/lib/grafana]
     restart: unless-stopped
     networks: [fleetwire]
     environment:
@@ -283,6 +316,7 @@ services:
     ports: ["127.0.0.1:3000:3000"]
 
   jaeger:
+    <<: *hardened
     image: jaegertracing/jaeger:2.11.0
     restart: unless-stopped
     networks: [fleetwire]
