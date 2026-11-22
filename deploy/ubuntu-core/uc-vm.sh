@@ -32,7 +32,12 @@ download)
   if [ ! -f "$IMG" ]; then
     curl -fL "$IMG_URL" -o "$IMG.xz"
     curl -fL "${IMG_URL%/*}/SHA256SUMS" -o "$WORK/SHA256SUMS"
-    (cd "$WORK" && grep " *$(basename "$IMG").xz\$" SHA256SUMS | sha256sum -c -)
+    # The exact file name, in text (" name") or binary ("*name") mode, as
+    # server-vm.sh does: cdimage lists "*ubuntu-core-24-amd64.img.xz", and
+    # a regex would also match other names that end the same way.
+    expected=$(awk -v f="*$(basename "$IMG").xz" '$2 == f || $2 == substr(f, 2) {print $1}' "$WORK/SHA256SUMS")
+    [ -n "$expected" ] || { echo "$(basename "$IMG").xz is not in SHA256SUMS" >&2; exit 1; }
+    echo "$expected  $IMG.xz" | sha256sum -c -
     xz -dk "$IMG.xz"
     qemu-img resize -f raw "$IMG" 8G
   fi
