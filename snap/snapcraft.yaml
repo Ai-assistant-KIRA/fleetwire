@@ -56,19 +56,25 @@ parts:
           done |
           tar --no-recursion --null --files-from=- --create --file=- |
           tar -xf - -C "${CRAFT_PART_SRC}"
-        # Resolve the version from the checked-out project, then reuse it
-        # for the snap metadata and the binary.
+        # One version and commit for the snap metadata and the binary.
         VERSION="$(git describe --tags --always --dirty)"
+        COMMIT="$(git rev-parse HEAD)"
       else
         # Not a git checkout (an unpacked source archive): git cannot list
         # the sources, so copy only what the agent build reads.
         echo "no .git in ${CRAFT_PROJECT_DIR}: building version dev" >&2
         tar --create --file=- go.mod go.sum cmd internal | tar -xf - -C "${CRAFT_PART_SRC}"
         VERSION=dev
+        COMMIT=unknown
       fi
       craftctl set version="${VERSION}"
+      # The build step reads these, as make build stamps every other binary.
+      printf 'COMMIT=%s\nDATE=%s\n' "${COMMIT}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        > "${CRAFT_PART_SRC}/.snap-buildinfo"
     override-build: |
       VERSION="$(craftctl get version)"
+      . "${CRAFT_PART_SRC}/.snap-buildinfo"
+      PKG=github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo
       CGO_ENABLED=0 go build -trimpath -buildvcs=false \
-        -ldflags "-s -w -X github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo.Version=${VERSION}" \
+        -ldflags "-s -w -X ${PKG}.Version=${VERSION} -X ${PKG}.Commit=${COMMIT} -X ${PKG}.Date=${DATE}" \
         -o "${CRAFT_PART_INSTALL}/bin/fleetwire-agent" ./cmd/fleetwire-agent
