@@ -228,7 +228,14 @@ paths:
     get:
       tags: [readings]
       operationId: listReadings
-      description: "Scope: readings:read. Readings in seq order, which is collection order. Without from, the window starts 24 hours before to, which defaults to now."
+      description: >-
+        Scope: readings:read. Readings in seq order, which is collection
+        order. Without from, the window starts 24 hours before to, which
+        defaults to now. Each request decrypts a bounded number of stored
+        chunks, so a page can hold fewer than limit readings, or none, and
+        still carry next_cursor; keep following next_cursor until it is
+        absent. A query that runs into the server's deadline gets 503 with
+        code timeout.
       parameters:
         - {$ref: "#/components/parameters/id"}
         - {name: from, in: query, schema: {type: string, format: date-time}}

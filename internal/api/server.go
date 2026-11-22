@@ -58,6 +58,9 @@ type Config struct {
 	ExportDir       string
 	// MaxActiveExports caps a tenant's pending and running exports.
 	MaxActiveExports int
+	// ReadingsScanChunks is the most chunks one readings page decrypts
+	// (default 2000).
+	ReadingsScanChunks int
 }
 
 // Deps are the API's collaborators.
@@ -113,6 +116,9 @@ func New(cfg Config, d Deps) *Server {
 	}
 	if cfg.MaxActiveExports <= 0 {
 		cfg.MaxActiveExports = 4
+	}
+	if cfg.ReadingsScanChunks <= 0 {
+		cfg.ReadingsScanChunks = defaultReadingsScanChunks
 	}
 	return &Server{
 		cfg:           cfg,
