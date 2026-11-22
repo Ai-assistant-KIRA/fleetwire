@@ -50,10 +50,12 @@ type sealKey struct {
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	db     *store.DB
-	kr     keyring.Keyring
-	log    *slog.Logger
-	deks   *lru.Cache[uuid.UUID, []byte]
+	db  *store.DB
+	kr  keyring.Keyring
+	log *slog.Logger
+	// deks is keyed by tenant and key, so that a key is only ever handed out
+	// for its own tenant and Forget can drop all of a tenant's keys.
+	deks   *lru.Cache[sealKey, []byte]
 	active *lru.Cache[uuid.UUID, *active]
 
 	mu      sync.Mutex
@@ -67,7 +69,7 @@ func New(db *store.DB, kr keyring.Keyring, log *slog.Logger) *Manager {
 		db:      db,
 		kr:      kr,
 		log:     log,
-		deks:    lru.New[uuid.UUID, []byte](cacheSize, cacheTTL),
+		deks:    lru.New[sealKey, []byte](cacheSize, cacheTTL),
 		active:  lru.New[uuid.UUID, *active](cacheSize, activeTTL),
 		pending: map[sealKey]int64{},
 		now:     time.Now,
@@ -126,7 +128,7 @@ func (m *Manager) SealingKey(ctx context.Context, tenant uuid.UUID) (uuid.UUID, 
 			if !m.needsRotation(a) {
 				// The key is usually still cached, so a refresh of the active
 				// key every minute does not call a remote keyring.
-				if dek, ok := m.deks.Get(k.KeyID); ok && k.WrappedDEK != nil && k.DestroyedAt == nil {
+				if dek, ok := m.deks.Get(sealKey{tenant, k.KeyID}); ok && k.WrappedDEK != nil && k.DestroyedAt == nil {
 					a.dek = dek
 					return nil
 				}
@@ -150,7 +152,7 @@ func (m *Manager) SealingKey(ctx context.Context, tenant uuid.UUID) (uuid.UUID, 
 		return uuid.Nil, nil, fmt.Errorf("sealing key: %w", err)
 	}
 	m.active.Add(tenant, a)
-	m.deks.Add(a.keyID, a.dek)
+	m.deks.Add(sealKey{tenant, a.keyID}, a.dek)
 	return a.keyID, a.dek, nil
 }
 
@@ -160,7 +162,7 @@ func (m *Manager) needsRotation(a *active) bool {
 
 // Key returns the data key keyID of tenant, for opening chunks.
 func (m *Manager) Key(ctx context.Context, tenant, keyID uuid.UUID) ([]byte, error) {
-	if dek, ok := m.deks.Get(keyID); ok {
+	if dek, ok := m.deks.Get(sealKey{tenant, keyID}); ok {
 		return dek, nil
 	}
 	var dek []byte
@@ -175,7 +177,7 @@ func (m *Manager) Key(ctx context.Context, tenant, keyID uuid.UUID) ([]byte, err
 	if err != nil {
 		return nil, fmt.Errorf("data key %s: %w", keyID, err)
 	}
-	m.deks.Add(keyID, dek)
+	m.deks.Add(sealKey{tenant, keyID}, dek)
 	return dek, nil
 }
 
@@ -193,12 +195,21 @@ func (m *Manager) unwrap(ctx context.Context, k store.TenantKey) ([]byte, error)
 	return dek, nil
 }
 
-// Forget drops every cached key of a destroyed tenant from this process.
+// Forget drops everything this process holds for a destroyed tenant: the
+// sealing key, every other unwrapped key, retired ones included, and seal
+// counts not flushed yet. A Key call that read the tenant's key row before
+// the destroy committed can still cache a key after Forget; the destroy job
+// calls Forget again once the tenant's KEK is gone and no unwrap can work.
 func (m *Manager) Forget(tenant uuid.UUID) {
-	if a, ok := m.active.Get(tenant); ok {
-		m.deks.Remove(a.keyID)
-	}
 	m.active.Remove(tenant)
+	m.deks.RemoveFunc(func(k sealKey) bool { return k.tenant == tenant })
+	m.mu.Lock()
+	for k := range m.pending {
+		if k.tenant == tenant {
+			delete(m.pending, k)
+		}
+	}
+	m.mu.Unlock()
 }
 
 // NoteSeals records n chunks sealed with keyID. Counts are written to the

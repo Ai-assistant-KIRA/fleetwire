@@ -104,6 +104,19 @@ func (c *Cache[K, V]) Remove(key K) {
 	}
 }
 
+// RemoveFunc deletes every key for which match returns true. It visits
+// every entry, so it suits rare clean-ups, not a hot path.
+func (c *Cache[K, V]) RemoveFunc(match func(K) bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, el := range c.items {
+		if match(key) {
+			c.order.Remove(el)
+			delete(c.items, key)
+		}
+	}
+}
+
 // Len is the number of entries.
 func (c *Cache[K, V]) Len() int {
 	c.mu.Lock()

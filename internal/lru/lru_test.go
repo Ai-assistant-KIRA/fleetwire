@@ -39,3 +39,26 @@ func TestExpiry(t *testing.T) {
 		t.Fatalf("GetOrAdd = %d", got)
 	}
 }
+
+func TestRemoveFunc(t *testing.T) {
+	c := New[int, string](10, 0)
+	for i := range 6 {
+		c.Add(i, "v")
+	}
+	c.RemoveFunc(func(k int) bool { return k%2 == 0 })
+	for i := range 6 {
+		if _, ok := c.Get(i); ok == (i%2 == 0) {
+			t.Errorf("key %d cached = %v after removing the even keys", i, ok)
+		}
+	}
+	if c.Len() != 3 {
+		t.Fatalf("Len = %d, want 3", c.Len())
+	}
+	// The eviction order survives: the least recently used odd key goes first.
+	for i := range 8 {
+		c.Add(100+i, "w")
+	}
+	if _, ok := c.Get(1); ok {
+		t.Fatal("key 1 should have been evicted first")
+	}
+}
