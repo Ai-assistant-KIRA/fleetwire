@@ -2,6 +2,11 @@
 bin
 dist
 deploy/compose/secrets
+# Private keys wherever they are, and the pki/ that the Juju guide has dev-ca
+# write at the repository root (only that one: internal/pki is Go source).
+**/*.key
+**/*-key.pem
+pki
 deploy/compose/.state
 deploy/ubuntu-core/work
 test/e2e/.state
