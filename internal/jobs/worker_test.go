@@ -2,9 +2,12 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
 )
@@ -138,5 +141,34 @@ func TestJobThatKeepsKillingItsWorkerFails(t *testing.T) {
 	}
 	if got := e.getExport(tenant, exp); got.Status != store.ExportFailed {
 		t.Fatalf("export %s, want failed", got.Status)
+	}
+}
+
+// TestSchedulerPrunesOldJobs: the retention scheduler deletes jobs that
+// finished more than 30 days ago, batch after batch.
+func TestSchedulerPrunesOldJobs(t *testing.T) {
+	e := newEnv(t, Config{BatchSize: 2})
+	tenant := e.tenant()
+	var old []uuid.UUID
+	for range 5 {
+		id := e.enqueue(tenant, store.JobRetention, struct{}{}, "")
+		e.asOwner(`UPDATE fleetwire.jobs SET status = 'succeeded', finished_at = now() - interval '31 days' WHERE id = $1`, id)
+		old = append(old, id)
+	}
+	recent := e.enqueue(tenant, store.JobRetention, struct{}{}, "")
+	e.asOwner(`UPDATE fleetwire.jobs SET status = 'succeeded', finished_at = now() - interval '1 day' WHERE id = $1`, recent)
+	if err := e.w.ScheduleRetention(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range old {
+		e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
+			if _, err := tx.GetJob(ctx, id); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("job %s finished 31 days ago: %v, want deleted", id, err)
+			}
+			return nil
+		})
+	}
+	if j := e.job(tenant, recent); j.Status != store.JobSucceeded {
+		t.Fatalf("the recent job is %q", j.Status)
 	}
 }

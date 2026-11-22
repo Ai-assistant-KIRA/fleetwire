@@ -761,3 +761,84 @@ func TestCompleteExportNeedsARunningExport(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestPruning: finished jobs older than 30 days and enrollment tokens 7 days
+// past their expiry are deleted, a batch at a time; everything else stays.
+func TestPruning(t *testing.T) {
+	db := storetest.AppDB(t)
+	f := newFixture(t, db)
+	conn, err := pgx.Connect(t.Context(), storetest.Start(t).OwnerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.WithoutCancel(t.Context()))
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(t.Context(), sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	jobs := map[string]uuid.UUID{}
+	for _, name := range []string{"old-succeeded", "old-failed", "recent-succeeded", "old-queued", "old-running"} {
+		jobs[name] = uuid.New()
+	}
+	exec(`INSERT INTO fleetwire.jobs (id, tenant_id, kind, status, created_at, finished_at) VALUES
+		($2, $1, 'retention', 'succeeded', now() - interval '40 days', now() - interval '31 days'),
+		($3, $1, 'retention', 'failed',    now() - interval '40 days', now() - interval '31 days'),
+		($4, $1, 'retention', 'succeeded', now() - interval '40 days', now() - interval '29 days'),
+		($5, $1, 'retention', 'queued',    now() - interval '40 days', NULL),
+		($6, $1, 'retention', 'running',   now() - interval '40 days', NULL)`,
+		f.tenant, jobs["old-succeeded"], jobs["old-failed"], jobs["recent-succeeded"], jobs["old-queued"], jobs["old-running"])
+	tokens := map[string]uuid.UUID{}
+	for _, name := range []string{"old-unused", "old-used", "recent", "valid"} {
+		tokens[name] = uuid.New()
+	}
+	exec(`INSERT INTO fleetwire.enrollment_tokens (id, tenant_id, token_hash, expires_at, used_at, created_by) VALUES
+		($2, $1, uuid_send($2), now() - interval '8 days', NULL, 'test'),
+		($3, $1, uuid_send($3), now() - interval '8 days', now() - interval '9 days', 'test'),
+		($4, $1, uuid_send($4), now() - interval '6 days', NULL, 'test'),
+		($5, $1, uuid_send($5), now() + interval '1 hour', NULL, 'test')`,
+		f.tenant, tokens["old-unused"], tokens["old-used"], tokens["recent"], tokens["valid"])
+
+	prune := func(fn func(*store.Tx, context.Context, int) (int64, error), limit int) int64 {
+		t.Helper()
+		var n int64
+		err := db.InTx(t.Context(), func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			n, err = fn(tx, ctx, limit)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := prune((*store.Tx).PruneFinishedJobs, 1); n != 1 {
+		t.Fatalf("a batch of 1 deleted %d jobs", n)
+	}
+	if n := prune((*store.Tx).PruneFinishedJobs, 100); n != 1 {
+		t.Fatalf("the second batch deleted %d jobs, want the other old one", n)
+	}
+	if n := prune((*store.Tx).PruneEnrollmentTokens, 100); n != 2 {
+		t.Fatalf("deleted %d tokens, want the 2 old ones", n)
+	}
+	exists := func(table string, id uuid.UUID) bool {
+		t.Helper()
+		var ok bool
+		if err := conn.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM fleetwire.`+table+` WHERE id = $1)`, id).Scan(&ok); err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	wantGone := map[string]bool{"old-succeeded": true, "old-failed": true, "old-unused": true, "old-used": true}
+	for name, id := range jobs {
+		if gone := !exists("jobs", id); gone != wantGone[name] {
+			t.Errorf("job %s: deleted %v, want %v", name, gone, wantGone[name])
+		}
+	}
+	for name, id := range tokens {
+		if gone := !exists("enrollment_tokens", id); gone != wantGone[name] {
+			t.Errorf("token %s: deleted %v, want %v", name, gone, wantGone[name])
+		}
+	}
+}

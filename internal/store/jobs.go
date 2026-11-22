@@ -151,6 +151,16 @@ func (t *Tx) ReleaseJob(ctx context.Context, id uuid.UUID, worker string) error 
 	return nil
 }
 
+// PruneFinishedJobs deletes up to limit jobs of every tenant that finished
+// more than 30 days ago (migration 00008).
+func (t *Tx) PruneFinishedJobs(ctx context.Context, limit int) (int64, error) {
+	var n int64
+	if err := t.tx.QueryRow(ctx, `SELECT fleetwire.prune_finished_jobs($1)`, limit).Scan(&n); err != nil {
+		return 0, fmt.Errorf("prune finished jobs: %w", err)
+	}
+	return n, nil
+}
+
 // HasRunningJob reports whether a job of kind of the current tenant is
 // claimed by a worker (or was, by one that died and whose lease has not
 // been taken over yet).

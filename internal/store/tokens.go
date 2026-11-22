@@ -39,6 +39,16 @@ func (t *Tx) ConsumeEnrollmentToken(ctx context.Context, hash []byte, deviceID u
 	return *tenant, outcome, nil
 }
 
+// PruneEnrollmentTokens deletes up to limit enrollment tokens of every
+// tenant that expired more than 7 days ago (migration 00008).
+func (t *Tx) PruneEnrollmentTokens(ctx context.Context, limit int) (int64, error) {
+	var n int64
+	if err := t.tx.QueryRow(ctx, `SELECT fleetwire.prune_enrollment_tokens($1)`, limit).Scan(&n); err != nil {
+		return 0, fmt.Errorf("prune enrollment tokens: %w", err)
+	}
+	return n, nil
+}
+
 //nolint:gosec // G101 false positive: a column list, not a credential.
 const apiTokenCols = `id, tenant_id, name, token_hash, scopes, created_at, last_used_at, revoked_at`
 

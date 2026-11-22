@@ -131,7 +131,10 @@ func (w *Worker) schedule(ctx context.Context) {
 	}
 }
 
-// ScheduleRetention enqueues this hour's retention jobs.
+// ScheduleRetention enqueues this hour's retention jobs, and deletes the
+// fleet-wide rows nobody needs any more: expired certificates, jobs that
+// finished more than 30 days ago, and enrollment tokens 7 days past their
+// expiry.
 func (w *Worker) ScheduleRetention(ctx context.Context) error {
 	var tenants []store.ActiveTenant
 	err := w.d.DB.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
@@ -144,6 +147,13 @@ func (w *Worker) ScheduleRetention(ctx context.Context) error {
 	})
 	if err != nil {
 		return err
+	}
+	for _, prune := range []func(*store.Tx, context.Context, int) (int64, error){
+		(*store.Tx).PruneFinishedJobs, (*store.Tx).PruneEnrollmentTokens,
+	} {
+		if err := w.pruneInBatches(ctx, prune); err != nil {
+			return err
+		}
 	}
 	hour := w.now().UTC().Format("2006-01-02T15")
 	for _, t := range tenants {
@@ -359,6 +369,25 @@ func (w *Worker) handle(ctx context.Context, j store.Job) (any, error) {
 		return w.destroyTenant(ctx, j.TenantID)
 	}
 	return nil, fmt.Errorf("unknown job kind %q", j.Kind)
+}
+
+// pruneInBatches runs a fleet-wide prune, BatchSize rows per transaction,
+// until a batch comes back short.
+func (w *Worker) pruneInBatches(ctx context.Context, prune func(*store.Tx, context.Context, int) (int64, error)) error {
+	for {
+		var n int64
+		err := w.d.DB.InTx(ctx, func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			n, err = prune(tx, ctx, w.cfg.BatchSize)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if n < int64(w.cfg.BatchSize) {
+			return nil
+		}
+	}
 }
 
 // deleteInBatches calls del until it deletes nothing, one transaction per
