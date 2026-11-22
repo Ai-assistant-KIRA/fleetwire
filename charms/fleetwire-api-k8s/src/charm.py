@@ -72,6 +72,21 @@ def readyz(port: int) -> bool:
         return False
 
 
+def files_digest(files: dict[str, str | bytes]) -> str:
+    """SHA-256 over the paths and contents of the files written for the service.
+
+    The API reads its certificates, CA key and keyring root key once, at
+    start. The digest goes into the layer's environment, so a rotated secret
+    changes the layer and replan restarts the service with the new files.
+    """
+    h = hashlib.sha256()
+    for path in sorted(files):
+        content = files[path]
+        data = content.encode() if isinstance(content, str) else content
+        h.update(path.encode() + b"\0" + len(data).to_bytes(8, "big") + data)
+    return h.hexdigest()
+
+
 @dataclass(frozen=True)
 class Database:
     """Connection details from a postgresql_client relation."""
@@ -239,13 +254,13 @@ class FleetwireApiCharm(ops.CharmBase):
             return
         if self.app.planned_units() > 1 or not self.config.get("device-broker-url"):
             return
-        self._write_files(pki, runtime.tls_ca or owner.tls_ca)
+        digest = self._write_files(pki, runtime.tls_ca or owner.tls_ca)
         due = self.unit.is_leader() and not self._migrated(owner)
         if due and not self._migrate(owner):
             return
         if not self._migrated():
             return
-        self._container.add_layer(SERVICE, self._layer(runtime), combine=True)
+        self._container.add_layer(SERVICE, self._layer(runtime, digest), combine=True)
         self._container.replan()
         if self.unit.is_leader():
             self._publish()
@@ -273,18 +288,21 @@ class FleetwireApiCharm(ops.CharmBase):
             return
         event.set_results({"token": out.strip()})
 
-    def _write_files(self, pki: dict[str, str], pg_ca: str | None) -> None:
+    def _write_files(self, pki: dict[str, str], pg_ca: str | None) -> str:
+        """Writes the service's files and returns their digest."""
         c = self._container
-        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
-        for key, name in PKI_FILES.items():
-            c.push(f"{PKI}/{name}", pki[key], **own)
-        c.push(f"{PKI}/{ROOT_KEY_FILE}", bytes.fromhex(pki["keyring-root-key"].strip()), **own)
+        files: dict[str, str | bytes] = {f"{PKI}/{name}": pki[key] for key, name in PKI_FILES.items()}
+        files[f"{PKI}/{ROOT_KEY_FILE}"] = bytes.fromhex(pki["keyring-root-key"].strip())
         if pg_ca:
-            c.push(f"{PKI}/postgresql-ca.pem", pg_ca, **own)
+            files[f"{PKI}/postgresql-ca.pem"] = pg_ca
+        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
+        for path, content in files.items():
+            c.push(path, content, **own)
         for sub in ("keyring", "crl", "exports"):
             c.make_dir(
                 f"{DATA}/{sub}", make_parents=True, permissions=0o700, user_id=WORKLOAD_UID, group_id=WORKLOAD_UID
             )
+        return files_digest(files)
 
     @staticmethod
     def _fingerprint(owner: Database) -> str:
@@ -318,7 +336,7 @@ class FleetwireApiCharm(ops.CharmBase):
             peer["migrated"] = self._fingerprint(owner)
         return True
 
-    def _layer(self, runtime: Database) -> ops.pebble.LayerDict:
+    def _layer(self, runtime: Database, files_sha256: str) -> ops.pebble.LayerDict:
         device_api = str(self.config.get("device-api-url") or f"https://{self._service_host}:{DEVICE_PORT}")
         env = {
             "FLEETWIRE_DATABASE_URL": runtime.url,
@@ -343,6 +361,8 @@ class FleetwireApiCharm(ops.CharmBase):
             "FLEETWIRE_LOG_LEVEL": str(self.config["log-level"]),
             "FLEETWIRE_JOB_WORKERS": str(self.config["job-workers"]),
             "FLEETWIRE_API_RATE_LIMIT": str(self.config["rate-limit"]),
+            # Not read by the API: a new value makes replan restart it.
+            "FLEETWIRE_CONFIG_SHA256": files_sha256,
         }
         return {
             "summary": "fleetwire API",

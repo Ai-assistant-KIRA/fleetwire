@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import ops
 import pytest
 from ops import testing
@@ -201,6 +203,56 @@ def test_workload_files_are_written_for_the_service_user(ctx):
     assert (fs / "etc/fleetwire/pki/keyring-root.key").read_bytes() == bytes.fromhex(ROOT_KEY)
     for sub in ("keyring", "crl", "exports"):
         assert (fs / "var/lib/fleetwire" / sub).is_dir()
+
+
+def rotated(running: testing.State, **changes: str) -> testing.State:
+    """The running state with the PKI secret's latest revision changed."""
+    secret = next(iter(running.secrets))
+    return dataclasses.replace(running, secrets=[dataclasses.replace(secret, latest_content={**PKI, **changes})])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"tls-cert": "NEW API CERT"},
+        {"device-ca-key": "NEW DEVICE CA KEY"},
+        {"keyring-root-key": "cd" * 32},
+    ],
+)
+def test_a_rotated_secret_restarts_the_api(ctx, changes):
+    running = ctx.run(ctx.on.config_changed(), state(pki_secret()))
+    before = env_of(running)
+    st = rotated(running, **changes)
+    out = ctx.run(ctx.on.secret_changed(next(iter(st.secrets))), st)
+    after = env_of(out)
+    # The API reads these files once. Pebble's replan restarts a service
+    # whose definition changed, and only the digest of the files changes it.
+    assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
+    assert {k: v for k, v in after.items() if k != "FLEETWIRE_CONFIG_SHA256"} == {
+        k: v for k, v in before.items() if k != "FLEETWIRE_CONFIG_SHA256"
+    }
+
+
+def test_a_new_postgresql_ca_restarts_the_api(ctx):
+    rels = [
+        owner_db({**OWNER, "tls": "True", "tls-ca": "PG CA 1"}),
+        runtime_db({**RUNTIME, "tls": "True", "tls-ca": "PG CA 1"}),
+    ]
+    running = ctx.run(ctx.on.config_changed(), state(pki_secret(), relations=rels))
+    renewed = [
+        dataclasses.replace(r, remote_app_data={**r.remote_app_data, "tls-ca": "PG CA 2"})
+        if r.endpoint in ("database", "runtime-database")
+        else r
+        for r in running.relations
+    ]
+    out = ctx.run(ctx.on.update_status(), dataclasses.replace(running, relations=renewed))
+    assert env_of(out)["FLEETWIRE_CONFIG_SHA256"] != env_of(running)["FLEETWIRE_CONFIG_SHA256"]
+
+
+def test_an_unchanged_secret_keeps_the_api_running(ctx):
+    running = ctx.run(ctx.on.config_changed(), state(pki_secret()))
+    out = ctx.run(ctx.on.update_status(), running)
+    assert out.get_container(CONTAINER).plan == running.get_container(CONTAINER).plan
 
 
 def test_failed_migrations_keep_the_service_down(ctx):
