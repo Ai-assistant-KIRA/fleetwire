@@ -13,6 +13,14 @@ func TestStringShortensCommitAndMarksDirty(t *testing.T) {
 	}
 }
 
+func TestStringLeavesOutAMissingDate(t *testing.T) {
+	got := Info{Version: "v1.2.3", GoVersion: "go1.x"}.String()
+	want := "v1.2.3 (commit unknown, go1.x)"
+	if got != want {
+		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
 func TestGetKeepsLinkerValues(t *testing.T) {
 	old := Version
 	t.Cleanup(func() { Version = old })

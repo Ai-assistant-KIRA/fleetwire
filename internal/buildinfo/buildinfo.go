@@ -67,5 +67,11 @@ func (i Info) String() string {
 	if i.Modified {
 		commit += "-dirty"
 	}
-	return fmt.Sprintf("%s (commit %s, built %s, %s)", i.Version, commit, i.Date, i.GoVersion)
+	// The snap stamps only Version and builds from a tree without .git, so
+	// a release binary can have no date at all.
+	built := ""
+	if i.Date != "" {
+		built = ", built " + i.Date
+	}
+	return fmt.Sprintf("%s (commit %s%s, %s)", i.Version, commit, built, i.GoVersion)
 }
