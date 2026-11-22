@@ -7,12 +7,17 @@ permissions:
   contents: read
 
 jobs:
-  # The tag's amd64 and arm64 snaps, built by snapcraft on native runners.
+  # The tagged commit is tested and its snaps are built in this same run, so
+  # a tag on a commit that fails CI or the end-to-end test publishes nothing.
+  ci:
+    uses: ./.github/workflows/ci.yml
+  e2e:
+    uses: ./.github/workflows/e2e.yml
   snap:
     uses: ./.github/workflows/snap.yml
 
   release:
-    needs: [snap]
+    needs: [ci, e2e, snap]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
