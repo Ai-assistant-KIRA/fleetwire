@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -23,6 +22,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/mqttconn"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/pki"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/telemetry"
 )
@@ -93,11 +93,12 @@ func (r *Runtime) Serve(ctx context.Context, adminAddr string, probes map[string
 	return err
 }
 
-// BrokerTLS builds the mTLS config a service uses to reach Mosquitto.
+// BrokerTLS builds the mTLS config a service uses to reach Mosquitto. The
+// URL must use a TLS scheme; with mqtt:// the config would go unused.
 func BrokerTLS(brokerURL, certFile, keyFile, caFile string) (*tls.Config, error) {
-	u, err := url.Parse(brokerURL)
+	u, err := mqttconn.RequireTLS(brokerURL)
 	if err != nil {
-		return nil, fmt.Errorf("broker url: %w", err)
+		return nil, err
 	}
 	cfg, err := ClientTLS(certFile, keyFile, caFile)
 	if err != nil {

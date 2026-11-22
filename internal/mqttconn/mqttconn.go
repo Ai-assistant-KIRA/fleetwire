@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"math"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -78,6 +80,25 @@ type Config struct {
 // of 65,535 costs 512 KiB per connection: 5 GB for the load generator's
 // 10,000 devices, which receive only a few acks at a time.
 const DefaultReceiveMaximum = 64
+
+// tlsSchemes are the URL schemes autopaho v0.23.0 dials with the TLS
+// config (autopaho/net.go); mqtt://, tcp:// and ws:// ignore it.
+var tlsSchemes = []string{"tls", "ssl", "mqtts", "mqtt+ssl", "tcps"}
+
+// RequireTLS parses a broker URL and checks that autopaho reaches it over
+// TLS. The services authenticate to the broker with client certificates:
+// with mqtt:// autopaho would drop the TLS config without a word and
+// connect in plain text.
+func RequireTLS(rawURL string) (*url.URL, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("broker url %q: %w", rawURL, err)
+	}
+	if !slices.Contains(tlsSchemes, strings.ToLower(u.Scheme)) || u.Host == "" {
+		return nil, fmt.Errorf("broker url %q: want a TLS URL such as tls://host:port (schemes %s)", rawURL, strings.Join(tlsSchemes, ", "))
+	}
+	return u, nil
+}
 
 // seconds converts d to the whole seconds of an MQTT field that holds at
 // most limit. A fraction of a second rounds up, never down to 0: for keep

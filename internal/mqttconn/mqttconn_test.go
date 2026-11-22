@@ -2,6 +2,7 @@ package mqttconn
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,34 @@ func TestStartRefusesDurationsMQTTCannotCarry(t *testing.T) {
 		if cm, err := Start(t.Context(), cfg); err == nil {
 			_ = cm.Disconnect(t.Context())
 			t.Errorf("Start accepted keep alive %v, session expiry %v", cfg.KeepAlive, cfg.SessionExpiry)
+		}
+	}
+}
+
+// A service certificate must not be offered over a connection autopaho
+// would make in plain text.
+func TestRequireTLS(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"tls://mosquitto:8884":   true,
+		"TLS://mosquitto:8884":   true,
+		"mqtts://mosquitto:8884": true,
+		"ssl://mosquitto:8884":   true,
+		"mqtt://mosquitto:8884":  false,
+		"tcp://mosquitto:8884":   false,
+		"ws://mosquitto:8884":    false,
+		"mosquitto:8884":         false,
+		"tls://":                 false,
+		"://bad":                 false,
+	} {
+		u, err := RequireTLS(raw)
+		if (err == nil) != ok {
+			t.Errorf("RequireTLS(%q) = %v, want ok %v", raw, err, ok)
+		}
+		if ok && err == nil && u.Hostname() != "mosquitto" {
+			t.Errorf("RequireTLS(%q) host %q", raw, u.Hostname())
+		}
+		if !ok && err != nil && !strings.Contains(err.Error(), raw) {
+			t.Errorf("RequireTLS(%q) error %q does not name the URL", raw, err)
 		}
 	}
 }
