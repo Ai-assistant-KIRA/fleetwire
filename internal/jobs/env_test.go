@@ -32,6 +32,7 @@ type env struct {
 	keys      *tenantkey.Manager
 	w         *Worker
 	exportDir string
+	tenants   []uuid.UUID
 }
 
 func newEnv(t *testing.T, cfg Config) *env {
@@ -59,6 +60,24 @@ func newEnv(t *testing.T, cfg Config) *env {
 	cfg.ExportDir = e.exportDir
 	cfg.WorkerID = "test-" + uuid.NewString()[:8]
 	e.w = NewWorker(cfg, Deps{DB: e.db, Keyring: kr, Keys: e.keys, CRL: pub, Log: log, Registry: prometheus.NewRegistry()})
+	// Every test shares one database, and a worker claims jobs of any
+	// tenant: jobs a test leaves unfinished must not run in the next one.
+	t.Cleanup(func() {
+		if len(e.tenants) == 0 {
+			return
+		}
+		ctx := context.Background()
+		conn, err := pgx.Connect(ctx, storetest.Start(t).OwnerURL)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close(ctx)
+		if _, err := conn.Exec(ctx, `UPDATE fleetwire.jobs SET status = 'failed', finished_at = now()
+			WHERE tenant_id = ANY ($1) AND status IN ('queued', 'running')`, e.tenants); err != nil {
+			t.Error(err)
+		}
+	})
 	return e
 }
 
@@ -75,6 +94,7 @@ func (e *env) tenant() uuid.UUID {
 		}
 		return e.keys.CreateFirstKey(ctx, tx)
 	})
+	e.tenants = append(e.tenants, id)
 	return id
 }
 

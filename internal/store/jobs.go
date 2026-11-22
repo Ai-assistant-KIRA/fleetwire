@@ -136,6 +136,21 @@ func (t *Tx) RetryJob(ctx context.Context, id uuid.UUID, worker, errMsg string, 
 	return status == JobFailed, nil
 }
 
+// ReleaseJob hands a job back when its worker stops before the attempt
+// finished (a shutdown). The attempt is not counted, and the job is
+// runnable again at once. Nothing changes when worker no longer holds it.
+func (t *Tx) ReleaseJob(ctx context.Context, id uuid.UUID, worker string) error {
+	_, err := t.tx.Exec(ctx, `
+		UPDATE fleetwire.jobs
+		SET status = 'queued', locked_until = NULL, locked_by = NULL, run_after = now(),
+		    attempts = greatest(attempts - 1, 0)
+		WHERE id = $1 AND locked_by = $2 AND status = 'running'`, id, worker)
+	if err != nil {
+		return fmt.Errorf("release job: %w", err)
+	}
+	return nil
+}
+
 // HasPendingJob reports whether the current tenant has an unfinished job
 // of kind (used to avoid starting a second tenant destroy).
 func (t *Tx) HasPendingJob(ctx context.Context, kind string) (bool, error) {

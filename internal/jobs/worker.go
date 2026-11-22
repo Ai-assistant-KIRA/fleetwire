@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,6 +61,8 @@ type Worker struct {
 	total   *prometheus.CounterVec
 	running prometheus.Gauge
 	now     func() time.Time
+	// handler runs one attempt of a job; tests replace it.
+	handler func(ctx context.Context, j store.Job) (any, error)
 }
 
 // NewWorker returns a worker.
@@ -87,6 +91,7 @@ func NewWorker(cfg Config, d Deps) *Worker {
 			Name: "fleetwire_jobs_running", Help: "Jobs running in this process.",
 		}),
 	}
+	w.handler = w.handle
 	d.Registry.MustRegister(w.total, w.running)
 	return w
 }
@@ -184,39 +189,49 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
+// recordTimeout bounds each database call that records how an attempt
+// ended. Those calls are detached from the worker's context, so a shutdown
+// does not lose the outcome of a job that just finished, but they must not
+// hold the shutdown up for long either.
+const recordTimeout = 15 * time.Second
+
 func (w *Worker) execute(ctx context.Context, j store.Job) {
 	w.running.Inc()
 	defer w.running.Dec()
 	log := w.d.Log.With("job_id", j.ID, "kind", j.Kind, "tenant_id", j.TenantID, "attempt", j.Attempts)
 	jctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-
-	// Keep the lease while the job runs; if another worker took it over
-	// (this one stalled past the lease), stop.
-	go func() {
-		t := time.NewTicker(w.cfg.Lease / 3)
-		defer t.Stop()
-		for {
-			select {
-			case <-jctx.Done():
-				return
-			case <-t.C:
-				err := w.d.DB.InTenantTx(jctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
-					return tx.ExtendJobLease(ctx, j.ID, w.cfg.WorkerID, w.cfg.Lease)
-				})
-				if errors.Is(err, store.ErrNotFound) {
-					log.Warn("job lease lost; stopping")
-					cancel()
-					return
-				}
-			}
-		}
-	}()
+	var lost atomic.Bool
+	var lease sync.WaitGroup
+	lease.Go(func() { w.keepLease(jctx, cancel, j, &lost, log) })
 
 	start := w.now()
-	result, err := w.handle(jctx, j)
-	if err == nil {
-		err = w.d.DB.InTenantTx(ctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
+	result, err := w.run(jctx, j, log)
+	// Stop the lease extender before recording the outcome: it must not
+	// race the finish, nor outlive the job and, at shutdown, the pool.
+	cancel()
+	lease.Wait()
+
+	switch {
+	case lost.Load():
+		// Another worker holds the job now and records its outcome.
+		w.total.WithLabelValues(j.Kind, "error").Inc()
+		log.Warn("job lease lost to another worker; this attempt is abandoned", "err", err)
+		return
+	case err != nil && ctx.Err() != nil:
+		// The worker is stopping, which is not the job's fault: hand it
+		// back without using up an attempt.
+		rerr := w.record(ctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
+			return tx.ReleaseJob(ctx, j.ID, w.cfg.WorkerID)
+		})
+		if rerr != nil {
+			log.Error("job interrupted by shutdown; could not release it, the lease will expire", "err", err, "record_err", rerr)
+			return
+		}
+		log.Info("job interrupted by shutdown; released", "err", err)
+		return
+	case err == nil:
+		err = w.record(ctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
 			return tx.FinishJob(ctx, j.ID, w.cfg.WorkerID, result)
 		})
 		if err == nil {
@@ -224,12 +239,13 @@ func (w *Worker) execute(ctx context.Context, j store.Job) {
 			log.Info("job done", "duration", w.now().Sub(start), "result", result)
 			return
 		}
+		err = fmt.Errorf("record the result: %w", err)
 	}
 	w.total.WithLabelValues(j.Kind, "error").Inc()
 	retry := w.now().Add(min(time.Duration(1<<min(j.Attempts, 10))*10*time.Second, time.Hour))
 	msg := err.Error()
 	var failed bool
-	rerr := w.d.DB.InTenantTx(context.WithoutCancel(ctx), j.TenantID, func(ctx context.Context, tx *store.Tx) error {
+	rerr := w.record(ctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
 		var err error
 		if failed, err = tx.RetryJob(ctx, j.ID, w.cfg.WorkerID, msg, retry); err != nil || !failed {
 			return err
@@ -244,6 +260,49 @@ func (w *Worker) execute(ctx context.Context, j store.Job) {
 	default:
 		log.Error("job failed; will retry", "err", err, "retry_at", retry)
 	}
+}
+
+// keepLease renews j's lease until ctx ends. If another worker took the job
+// over (this one stalled past the lease), it sets lost and calls stop.
+func (w *Worker) keepLease(ctx context.Context, stop context.CancelFunc, j store.Job, lost *atomic.Bool, log *slog.Logger) {
+	t := time.NewTicker(w.cfg.Lease / 3)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		err := w.d.DB.InTenantTx(ctx, j.TenantID, func(ctx context.Context, tx *store.Tx) error {
+			return tx.ExtendJobLease(ctx, j.ID, w.cfg.WorkerID, w.cfg.Lease)
+		})
+		if errors.Is(err, store.ErrNotFound) {
+			log.Warn("job lease lost; stopping")
+			lost.Store(true)
+			stop()
+			return
+		}
+	}
+}
+
+// run calls the job's handler. A panic fails the attempt the way an error
+// does, so one bad job cannot take the API process down with it.
+func (w *Worker) run(ctx context.Context, j store.Job, log *slog.Logger) (result any, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("job handler panicked", "panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("job handler panicked: %v", p)
+		}
+	}()
+	return w.handler(ctx, j)
+}
+
+// record runs fn in a tenant transaction detached from ctx and bounded by
+// recordTimeout.
+func (w *Worker) record(ctx context.Context, tenant uuid.UUID, fn func(ctx context.Context, tx *store.Tx) error) error {
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	return w.d.DB.InTenantTx(rctx, tenant, fn)
 }
 
 // exportFailed is what a tenant sees on an export whose job failed for good.
