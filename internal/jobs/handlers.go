@@ -67,8 +67,8 @@ func (w *Worker) retention(ctx context.Context, tenant uuid.UUID) (any, error) {
 		}
 		for _, e := range expired {
 			if e.FilePath != nil {
-				if err := os.Remove(*e.FilePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-					return nil, fmt.Errorf("remove expired export: %w", err)
+				if _, err := w.removeExportFile(*e.FilePath); err != nil {
+					return nil, err
 				}
 			}
 			if err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
@@ -256,6 +256,33 @@ func (c *countWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// removeExportFile deletes an export file whose path comes from the
+// database, and reports whether the path was one it may delete. Only paths
+// inside ExportDir are deleted, through os.Root, which also refuses
+// symlinks that lead out of it. A path outside is logged and left alone
+// rather than failing the job: retention and destroy must not get stuck on
+// a row someone edited or on an ExportDir that moved.
+func (w *Worker) removeExportFile(path string) (bool, error) {
+	rel, err := filepath.Rel(w.cfg.ExportDir, path)
+	if err != nil || !filepath.IsLocal(rel) {
+		w.d.Log.Error("export file is outside the export directory; not deleting it",
+			"path", path, "export_dir", w.cfg.ExportDir)
+		return false, nil
+	}
+	root, err := os.OpenRoot(w.cfg.ExportDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("open export dir: %w", err)
+	}
+	defer root.Close()
+	if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("remove export file: %w", err)
+	}
+	return true, nil
+}
+
 func syncDir(dir string) error {
 	d, err := os.Open(dir)
 	if err != nil {
@@ -355,10 +382,13 @@ func (w *Worker) destroyTenant(ctx context.Context, tenant uuid.UUID) (any, erro
 		return nil, err
 	}
 	for _, f := range files {
-		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("remove export file: %w", err)
+		ok, err := w.removeExportFile(f)
+		if err != nil {
+			return nil, err
 		}
-		res.FilesGone++
+		if ok {
+			res.FilesGone++
+		}
 	}
 	if res.RowsDeleted, err = w.deleteInBatches(ctx, tenant, func(ctx context.Context, tx *store.Tx) (int64, error) {
 		return tx.DeleteTenantData(ctx, w.cfg.BatchSize)

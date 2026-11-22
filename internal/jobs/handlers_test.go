@@ -2,9 +2,12 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/google/uuid"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
 )
@@ -80,5 +83,46 @@ func TestDestroyCanBeQueuedAgainAfterItFailed(t *testing.T) {
 	}
 	if again := e.enqueue(tenant, store.JobTenantDestroy, map[string]any{"tenant_id": tenant}, key); again != second {
 		t.Fatalf("a succeeded job must keep its key: got %s, want %s", again, second)
+	}
+}
+
+// TestRetentionDeletesOnlyFilesInTheExportDir: an expired export whose
+// recorded path points outside the export directory is marked expired, but
+// the file it names is not deleted.
+func TestRetentionDeletesOnlyFilesInTheExportDir(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	inside := filepath.Join(e.exportDir, tenant.String(), "inside.ndjson.gz")
+	outside := filepath.Join(t.TempDir(), "precious")
+	for _, p := range []string{inside, outside} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The second one escapes through a relative path, the third is absolute.
+	paths := []string{inside, filepath.Join(e.exportDir, "..", filepath.Base(filepath.Dir(outside)), "precious"), outside}
+	var ids []uuid.UUID
+	for _, p := range paths {
+		id, _ := e.export(tenant)
+		e.asOwner(`UPDATE fleetwire.exports SET status = 'ready', file_path = $2, expires_at = now() - interval '1 hour'
+			WHERE id = $1`, id, p)
+		ids = append(ids, id)
+	}
+	// The export jobs see a ready export and do nothing.
+	e.enqueue(tenant, store.JobRetention, struct{}{}, "")
+	e.runJobs()
+	if _, err := os.Stat(inside); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the expired export inside the export dir is still there: %v", err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Errorf("retention deleted a file outside the export dir: %v", err)
+	}
+	for _, id := range ids {
+		if got := e.getExport(tenant, id); got.Status != store.ExportExpired {
+			t.Errorf("export %s is %s, want expired", id, got.Status)
+		}
 	}
 }
