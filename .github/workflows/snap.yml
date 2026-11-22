@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# As in ci.yml: a newer push to the same pull request cancels the older
+# two-architecture build; runs for main always finish.
+concurrency:
+  group: snap-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build:
     strategy:

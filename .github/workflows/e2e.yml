@@ -10,7 +10,18 @@ permissions:
 
 jobs:
   e2e:
-    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    # On a pull request: when the e2e label is added, and on every push while
+    # it is there. Adding some other label does not start a run.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.action == 'labeled' && github.event.label.name == 'e2e') ||
+      (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'e2e'))
+    # Job-level, so a run whose job is skipped never cancels one that runs.
+    # Only a newer run for the same pull request cancels; main gets a group
+    # per run.
+    concurrency:
+      group: e2e-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
