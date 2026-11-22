@@ -218,7 +218,9 @@ class MosquittoCharm(ops.CharmBase):
 
     def _service_ready(self) -> bool:
         services = self._container.get_services(SERVICE)
-        return SERVICE in services and services[SERVICE].is_running() and listening(SERVICE_PORT)
+        if SERVICE not in services or not services[SERVICE].is_running():
+            return False
+        return listening(SERVICE_PORT) and listening(DEVICE_PORT)
 
     def _reconcile(self, _: ops.EventBase) -> None:
         self.unit.set_ports(DEVICE_PORT, SERVICE_PORT)
@@ -263,15 +265,27 @@ class MosquittoCharm(ops.CharmBase):
                     "command": f"mosquitto -c {CONF_DIR}/mosquitto.conf",
                     "startup": "enabled",
                     "environment": {"FLEETWIRE_CONFIG_SHA256": digest},
+                    "on-check-failure": {"listening": "restart"},
                 }
             },
+            # Mosquitto has no health endpoint, so the checks connect to the
+            # listeners. A broker that stops accepting service connections
+            # for two minutes is restarted. The window is that wide because
+            # Mosquitto restores its persistence file before it listens.
             "checks": {
                 "listening": {
+                    "override": "replace",
+                    "level": "alive",
+                    "period": "10s",
+                    "threshold": 12,
+                    "tcp": {"port": SERVICE_PORT},
+                },
+                "device-listening": {
                     "override": "replace",
                     "level": "ready",
                     "period": "10s",
                     "threshold": 3,
-                    "tcp": {"port": SERVICE_PORT},
+                    "tcp": {"port": DEVICE_PORT},
                 },
             },
         }

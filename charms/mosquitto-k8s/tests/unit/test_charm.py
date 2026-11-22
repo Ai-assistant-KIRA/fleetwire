@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 from pathlib import Path
 
+import ops
 import pytest
 from ops import testing
 
@@ -255,7 +256,22 @@ def test_the_running_broker_keeps_loading_crls_after_a_scale_up(ctx, root, api, 
     )
 
 
-def test_active_when_listening(ctx, root, api, monkeypatch):
-    monkeypatch.setattr(charm, "listening", lambda port: port == 8884)
+def test_active_when_both_listeners_accept(ctx, root, api, monkeypatch):
+    monkeypatch.setattr(charm, "listening", lambda port: port in (8883, 8884))
     out = ctx.run(ctx.on.config_changed(), setup(root))
     assert out.unit_status == testing.ActiveStatus()
+
+
+def test_waits_while_the_device_listener_is_down(ctx, root, api, monkeypatch):
+    monkeypatch.setattr(charm, "listening", lambda port: port == 8884)
+    out = ctx.run(ctx.on.config_changed(), setup(root))
+    assert out.unit_status == testing.WaitingStatus("waiting for Mosquitto to listen")
+
+
+def test_checks_both_listeners_and_restarts_a_broker_that_stops_accepting(ctx, root, api):
+    out = ctx.run(ctx.on.config_changed(), setup(root))
+    plan = out.get_container(CONTAINER).plan
+    alive, ready = plan.checks["listening"], plan.checks["device-listening"]
+    assert (alive.level, alive.tcp, alive.threshold) == (ops.pebble.CheckLevel.ALIVE, {"port": 8884}, 12)
+    assert (ready.level, ready.tcp) == (ops.pebble.CheckLevel.READY, {"port": 8883})
+    assert plan.services[SERVICE].on_check_failure == {"listening": "restart"}
