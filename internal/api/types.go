@@ -103,7 +103,11 @@ type exportJSON struct {
 
 func toExport(e store.Export) exportJSON {
 	out := exportJSON{ID: e.ID, DeviceID: e.DeviceID, Status: e.Status, Bytes: e.Bytes, ReadingCount: e.ReadingCount,
-		Error: e.Error, CreatedAt: e.CreatedAt, CompletedAt: e.CompletedAt, ExpiresAt: e.ExpiresAt}
+		CreatedAt: e.CreatedAt, CompletedAt: e.CompletedAt, ExpiresAt: e.ExpiresAt}
+	if e.Error != nil {
+		msg := "the export failed; create a new one"
+		out.Error = &msg
+	}
 	if len(e.SHA256) > 0 {
 		out.SHA256 = hex.EncodeToString(e.SHA256)
 	}
@@ -142,9 +146,19 @@ type jobJSON struct {
 	FinishedAt *time.Time      `json:"finished_at,omitempty"`
 }
 
+// failedAttempt replaces the stored error text of jobs and exports, which
+// holds internal detail such as SQL errors and file paths. The worker logs
+// the real error with the job ID.
+const failedAttempt = "an attempt failed; operators can find the error in the server log by job ID"
+
 func toJob(j store.Job) jobJSON {
-	return jobJSON{ID: j.ID, Kind: j.Kind, Status: j.Status, Attempts: j.Attempts, LastError: j.LastError,
+	out := jobJSON{ID: j.ID, Kind: j.Kind, Status: j.Status, Attempts: j.Attempts,
 		Result: j.Result, CreatedAt: j.CreatedAt, FinishedAt: j.FinishedAt}
+	if j.LastError != nil {
+		msg := failedAttempt
+		out.LastError = &msg
+	}
+	return out
 }
 
 type acceptedJSON struct {

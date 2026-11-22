@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/tokens"
 )
 
 func (s *Server) getTenant(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
@@ -302,6 +303,15 @@ func (s *Server) listAudit(w http.ResponseWriter, r *http.Request, p *principal)
 	}, p.tenant)
 }
 
+// jobScopes is the scope needed to read a job of each kind: the read scope
+// of what the job works on. Kinds missing here are refused.
+var jobScopes = map[string]string{
+	store.JobExport:        tokens.ScopeExportsRead,
+	store.JobDevicePurge:   tokens.ScopeDevicesRead,
+	store.JobRetention:     tokens.ScopeTenantAdmin,
+	store.JobTenantDestroy: tokens.ScopeTenantAdmin,
+}
+
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
 	id, e := pathID(r)
 	if e != nil {
@@ -318,6 +328,9 @@ func (s *Server) getJob(w http.ResponseWriter, r *http.Request, p *principal) *a
 	}
 	if err != nil {
 		return s.internal(r, err)
+	}
+	if scope, ok := jobScopes[j.Kind]; !ok || !p.has(scope) {
+		return errForbidden
 	}
 	writeJSON(w, http.StatusOK, toJob(j))
 	return nil

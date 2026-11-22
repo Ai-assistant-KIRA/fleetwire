@@ -166,7 +166,7 @@ func (s *Server) PublicHandler() http.Handler {
 	route(mux, "GET /v1/exports/{id}", s.tenantRoute(tokens.ScopeExportsRead, s.getExport))
 	route(mux, "GET /v1/exports/{id}/download", s.tenantRoute(tokens.ScopeExportsRead, s.downloadExport))
 	route(mux, "GET /v1/audit", s.tenantRoute(tokens.ScopeAuditRead, s.listAudit))
-	route(mux, "GET /v1/jobs/{id}", s.tenantRoute(tokens.ScopeDevicesRead, s.getJob))
+	route(mux, "GET /v1/jobs/{id}", s.tenantRoute(scopeByJobKind, s.getJob))
 
 	return wrap("public", mux, s.log, s.metrics)
 }

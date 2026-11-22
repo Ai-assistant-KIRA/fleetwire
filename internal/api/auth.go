@@ -169,6 +169,10 @@ func (s *Server) runTouches(ctx context.Context) {
 
 type handler func(w http.ResponseWriter, r *http.Request, p *principal) *apiError
 
+// scopeByJobKind is the scope of a route whose handler checks the scope
+// itself, because it depends on the job the route loads.
+const scopeByJobKind = ""
+
 // tenantRoute requires a tenant token with scope.
 func (s *Server) tenantRoute(scope string, h handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -176,7 +180,7 @@ func (s *Server) tenantRoute(scope string, h handler) http.Handler {
 		if !ok {
 			return
 		}
-		if p.operator || !p.has(scope) {
+		if p.operator || (scope != scopeByJobKind && !p.has(scope)) {
 			writeProblem(w, r, errForbidden)
 			return
 		}

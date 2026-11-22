@@ -322,7 +322,10 @@ paths:
     get:
       tags: [tenant]
       operationId: getJob
-      description: "Scope: devices:read."
+      description: >-
+        Scope: the read scope of what the job works on. exports:read for
+        export jobs, devices:read for device_purge, tenant:admin for
+        retention and tenant_destroy.
       parameters: [{$ref: "#/components/parameters/id"}]
       responses:
         "200":
@@ -653,7 +656,7 @@ components:
         bytes: {type: integer, minimum: 0}
         reading_count: {type: integer, minimum: 0}
         sha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        error: {type: string}
+        error: {type: string, description: "Set when the export failed. The cause is only in the server log."}
         created_at: {type: string, format: date-time}
         completed_at: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
@@ -689,7 +692,7 @@ components:
         kind: {type: string, enum: [retention, export, device_purge, tenant_destroy]}
         status: {type: string, enum: [queued, running, succeeded, failed]}
         attempts: {type: integer, minimum: 0}
-        last_error: {type: string}
+        last_error: {type: string, description: "Set once an attempt has failed. The error itself is only in the server log, under the job ID."}
         result: {}
         created_at: {type: string, format: date-time}
         finished_at: {type: string, format: date-time}
