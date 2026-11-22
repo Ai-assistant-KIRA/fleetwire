@@ -21,6 +21,7 @@ tutorial/run-a-fleet
 how-to/enroll-a-device
 how-to/recover-device-state
 how-to/operate
+how-to/back-up-the-keyring
 how-to/run-failure-tests
 how-to/run-on-ubuntu-core
 how-to/deploy-with-juju

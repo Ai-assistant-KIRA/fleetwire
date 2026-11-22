@@ -47,8 +47,8 @@ own key (R9.4). The key design must allow a KMS or Vault backend later.
 ## Consequences
 
 - The keyring directory must be backed up separately and with a short
-  retention, or a destroyed tenant's KEK survives in a keyring backup. The ops
-  docs say so.
+  retention, or a destroyed tenant's KEK survives in a keyring backup:
+  [Back up the keyring](../how-to/back-up-the-keyring.md).
 - On SSDs, deleting a file is not a secure erase. Production should use a KMS
   backend with real key destruction; that backend is future work.
 - With the remote backend ingest holds data keys in memory (cached for 5

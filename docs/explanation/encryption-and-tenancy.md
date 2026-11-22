@@ -40,7 +40,8 @@ stay.
   KMS or Vault backend with real key destruction. The `Keyring` interface
   exists for that; only the local file backend is built.
 - Back up the keyring directory separately, with a short retention, or a
-  destroyed tenant's KEK survives in an old keyring backup.
+  destroyed tenant's KEK survives in an old keyring backup
+  ([Back up the keyring](../how-to/back-up-the-keyring.md)).
 - Export files are plaintext for up to 24 hours. Put the export directory
   on an encrypted volume.
 
