@@ -34,7 +34,8 @@ $ charms/build.sh
 
 `build.sh` runs `charmcraft pack` in each charm directory and pushes
 `localhost:32000/fleetwire-{api,ingest,bridge}:<commit>`. Set `REGISTRY` and
-`TAG` to push elsewhere. Use a new tag for every build: a node that already
+`TAG` to push elsewhere. charmcraft builds the charms for the host's
+architecture; on arm64, point the bundle at the `_arm64.charm` files. Use a new tag for every build: a node that already
 has an image under a tag does not pull it again. Released versions are on
 GHCR, which the bundle uses by default.
 

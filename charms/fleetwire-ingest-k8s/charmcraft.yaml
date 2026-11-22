@@ -20,7 +20,10 @@ links:
 
 base: ubuntu@24.04
 platforms:
+  # The images are published for both. charmcraft pack builds the
+  # platform of the host it runs on.
   amd64:
+  arm64:
 
 parts:
   charm:

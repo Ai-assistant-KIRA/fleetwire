@@ -1,6 +1,7 @@
 # fleetwire on Kubernetes: the four fleetwire charms with Charmed PostgreSQL
 # and Charmed Kafka. Build the local charms first (charmcraft pack in each
-# directory) and see docs/how-to/deploy-with-juju.md for the secrets.
+# directory) and see docs/how-to/deploy-with-juju.md for the secrets. On an
+# arm64 cluster, pack on an arm64 host and use the _arm64.charm files.
 #
 #   juju deploy ./bundle.yaml --trust
 bundle: kubernetes
