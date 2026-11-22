@@ -38,6 +38,15 @@ q() { # instant query, one number ("nan" when there is no data)
     jq -r '.data.result[0].value[1] // "nan"'
 }
 
+# arm64 kernels write no "model name" to /proc/cpuinfo; lscpu names Arm
+# cores, and the architecture is the last resort.
+cpu_model() {
+  local m
+  m=$(awk -F': *' '/^model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
+  [ -n "$m" ] || m=$(LC_ALL=C lscpu 2>/dev/null | awk -F': *' '/^Model name/ { print $2; exit }' || true)
+  printf '%s\n' "${m:-$(uname -m)}"
+}
+
 mkdir -p "$state"
 if [ ! -s "$state/tenant-token" ]; then
   # Tokens go to fwctl in its environment, not on the command line, where
@@ -63,7 +72,7 @@ fi
 search() {
   echo "# Throughput search, $(date -u '+%Y-%m-%d %H:%M UTC')"
   echo
-  echo "Machine: $(nproc) vCPU $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs), $(free -g | awk '/Mem:/ {print $2}') GiB RAM; load generator and backend on the same machine."
+  echo "Machine: $(nproc) vCPU $(cpu_model), $(free -g | awk '/Mem:/ {print $2}') GiB RAM; load generator and backend on the same machine."
   echo "Commit: ${commit}, written by \`scripts/throughput.sh\`, ${step_s} s per step, rates over the last 2 minutes of each step."
   echo "Device state: ${where}."
   echo

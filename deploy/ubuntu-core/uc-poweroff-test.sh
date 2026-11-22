@@ -23,6 +23,14 @@ SSH+=("${UC_USER:?set UC_USER}@localhost")
 qmp() {
   printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$1" | socat - UNIX-CONNECT:"$WORK/qmp.sock" >/dev/null
 }
+# arm64 kernels write no "model name" to /proc/cpuinfo; lscpu names Arm
+# cores, and the architecture is the last resort.
+cpu_model() {
+  local m
+  m=$(awk -F': *' '/^model name/ { print $2; exit }' /proc/cpuinfo 2>/dev/null || true)
+  [ -n "$m" ] || m=$(LC_ALL=C lscpu 2>/dev/null | awk -F': *' '/^Model name/ { print $2; exit }' || true)
+  printf '%s\n' "${m:-$(uname -m)}"
+}
 wait_ssh() {
   for _ in $(seq 1 180); do
     "${SSH[@]}" true 2>/dev/null && return 0
@@ -76,7 +84,7 @@ cat > "$out.md" <<EOF
 # Power-off test $stamp
 
 - Commit: \`$commit\`
-- Host: $(nproc) vCPU $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | xargs), $(free -g | awk '/Mem:/ {print $2}') GiB RAM, QEMU accel $([ -w /dev/kvm ] && echo kvm || echo tcg)
+- Host: $(nproc) vCPU $(cpu_model), $(free -g | awk '/Mem:/ {print $2}') GiB RAM, QEMU accel $([ -w /dev/kvm ] && echo kvm || echo tcg)
 - Guest: $guest; snap fleetwire-agent $snap
 - Command: \`RESETS=$N deploy/ubuntu-core/uc-poweroff-test.sh\` (written by the script)
 - Load: one reading every 200 ms, \`wal.sync=interval\` (1 s); QMP \`system_reset\` $N times, 5 to 30 s after the guest was reachable again; $minutes minutes in all
