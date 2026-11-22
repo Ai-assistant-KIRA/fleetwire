@@ -244,6 +244,73 @@ tests:
       - eval_time: 33m
         alertname: FleetwireBridgeNotProducing
         exp_alerts: []
+  # bridge-1 stops answering scrapes at 6m: a ticket at 11m, no page, as
+  # bridge-2 is up. The load generator is down, as it is between tests,
+  # and does not alert.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="fleetwire-api",instance="api:9090"}'
+        values: '1x20'
+      - series: 'up{job="fleetwire-bridge",instance="bridge-1:9090"}'
+        values: '1x5 0x15'
+      - series: 'up{job="fleetwire-bridge",instance="bridge-2:9090"}'
+        values: '1x20'
+      - series: 'up{job="fleetwire-ingest",instance="ingest-1:9090"}'
+        values: '1x20'
+      - series: 'up{job="fleetwire-ingest",instance="ingest-2:9090"}'
+        values: '1x20'
+      - series: 'up{job="fleetwire-loadgen",instance="172.31.250.1:9466"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: FleetwireTargetDown
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: FleetwireTargetDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: fleetwire-bridge, instance: "bridge-1:9090"}
+            exp_annotations:
+              summary: "Prometheus cannot scrape fleetwire-bridge at bridge-1:9090."
+      - eval_time: 20m
+        alertname: FleetwireServiceDown
+        exp_alerts: []
+  # Both ingest replicas go down at 6m, and Prometheus has no API target at
+  # all. Each job pages 2 minutes after it is lost; each lost ingest target
+  # also gets a ticket.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="fleetwire-bridge",instance="bridge-1:9090"}'
+        values: '1x20'
+      - series: 'up{job="fleetwire-ingest",instance="ingest-1:9090"}'
+        values: '1x5 0x15'
+      - series: 'up{job="fleetwire-ingest",instance="ingest-2:9090"}'
+        values: '1x5 0x15'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: FleetwireServiceDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: fleetwire-api}
+            exp_annotations:
+              summary: "No fleetwire-api target is up or none is configured; the alerts that depend on its metrics cannot fire."
+      - eval_time: 8m
+        alertname: FleetwireServiceDown
+        exp_alerts:
+          - exp_labels: {severity: page, job: fleetwire-api}
+            exp_annotations:
+              summary: "No fleetwire-api target is up or none is configured; the alerts that depend on its metrics cannot fire."
+          - exp_labels: {severity: page, job: fleetwire-ingest}
+            exp_annotations:
+              summary: "No fleetwire-ingest target is up or none is configured; the alerts that depend on its metrics cannot fire."
+      - eval_time: 11m
+        alertname: FleetwireTargetDown
+        exp_alerts:
+          - exp_labels: {severity: ticket, job: fleetwire-ingest, instance: "ingest-1:9090"}
+            exp_annotations:
+              summary: "Prometheus cannot scrape fleetwire-ingest at ingest-1:9090."
+          - exp_labels: {severity: ticket, job: fleetwire-ingest, instance: "ingest-2:9090"}
+            exp_annotations:
+              summary: "Prometheus cannot scrape fleetwire-ingest at ingest-2:9090."
+
   - interval: 1m
     input_series:
       - series: 'fleetwire_ingest_exclusion_violations_total{instance="ingest-1:9090"}'

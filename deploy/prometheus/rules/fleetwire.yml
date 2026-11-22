@@ -127,3 +127,28 @@ groups:
         labels: {severity: page}
         annotations:
           summary: The database rejected an overlapping chunk. This is a bug signal; the batch went to the DLQ and the device will resend.
+  # Without these, a stopped service makes the SLO and symptom alerts above
+  # go quiet instead of firing: their series stop or disappear. Job names
+  # are those in deploy/prometheus/prometheus.yml. fleetwire-loadgen is left
+  # out: it runs only during tests.
+  - name: fleetwire-liveness
+    rules:
+      - alert: FleetwireTargetDown
+        # One replica; the others carry its work.
+        expr: up{job=~"fleetwire-(api|bridge|ingest)"} == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }}."
+      - alert: FleetwireServiceDown
+        # Every target of a job is down, or Prometheus has none at all (a
+        # discovery or configuration change dropped them).
+        expr: >-
+          sum by (job) (up{job=~"fleetwire-(api|bridge|ingest)"}) == 0
+          or absent(up{job="fleetwire-api"})
+          or absent(up{job="fleetwire-bridge"})
+          or absent(up{job="fleetwire-ingest"})
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "No {{ $labels.job }} target is up or none is configured; the alerts that depend on its metrics cannot fire."

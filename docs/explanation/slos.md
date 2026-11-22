@@ -48,5 +48,13 @@ Symptom alerts without an SLO:
 - `FleetwireExclusionViolation` (page): the database rejected an overlapping
   chunk; this must never happen.
 
+Liveness alerts, for the API, bridge and ingest scrape jobs (a stopped
+service stops its metrics, which silences the alerts above):
+
+- `FleetwireTargetDown` (ticket): Prometheus has not scraped one target for
+  5 minutes.
+- `FleetwireServiceDown` (page): for 2 minutes, every target of a job is down
+  or Prometheus has none.
+
 `make rules-test` checks the rules with `promtool check rules` and runs the
 unit tests in `deploy/prometheus/tests/`.
