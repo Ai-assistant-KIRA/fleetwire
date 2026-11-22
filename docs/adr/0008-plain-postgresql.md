@@ -13,7 +13,8 @@ device, seq range, first and last collect time, reading count.
 ## Decision
 
 Use plain PostgreSQL 16. Store one row per stored seq range ("chunk", up to
-one uplink batch, normally about 100 readings). Index chunks by
+one uplink batch: at most `uplink.batch-size` readings, 100 by default,
+and one collection when the device is caught up). Index chunks by
 `(tenant_id, device_id, max_collected_at)` for queries and
 `(tenant_id, max_collected_at)` for retention. The API selects the chunks
 that overlap a time window, decrypts them, and filters by time and metric
@@ -32,8 +33,16 @@ in Go.
 
 ## Consequences
 
-- Row counts stay low (about one per batch), so 10,000 devices at one
-  reading every 10 seconds is roughly 10 rows per second.
+- About one row per batch. A caught-up device sends each collection as
+  its own batch, because `uplink.batch-wait` (1 s) is shorter than the
+  collect interval. So 10,000 devices at one reading every 10 seconds
+  write about 1,000 rows per second, one reading each, and a real agent's
+  collection (11 readings from the built-in collectors on a machine
+  without thermal zones) goes into one row. (Corrected on 2026-11-22: this
+  said 10 rows per second.) The throughput search of 2026-11-10 measured
+  both shapes: ingest kept up with 1,000 rows/s of one reading each, and
+  with 500 rows/s of 64 readings each, 32,000 readings/s
+  ([table](../results/2026-11-10T044759Z-add94424b241-throughput.md)).
 - Queries filtered by metric decrypt whole chunks; a narrow query over a
   long window costs more CPU than an indexed lookup would.
 - Aggregations (averages, downsampling) happen in the client or a future
