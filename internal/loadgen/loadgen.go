@@ -71,9 +71,27 @@ type Result struct {
 
 // Metrics of the generator itself; the devices share agent.Metrics.
 type Metrics struct {
-	Running  prometheus.Gauge
-	Enrolled prometheus.Counter
-	Failed   prometheus.Counter
+	Running    prometheus.Gauge
+	Enrolled   prometheus.Counter
+	Failed     prometheus.Counter
+	OpenFailed prometheus.Counter
+}
+
+// Stats counts the device instances of this process. The load generator
+// serves them at /status, and the chaos runner reads them there rather
+// than from Prometheus, which scrapes every few seconds and right after a
+// restart can still hold the killed process's numbers.
+type Stats struct {
+	// Devices is the number of instances asked for (-devices).
+	Devices int   `json:"devices"`
+	Started int64 `json:"started"`
+	Running int64 `json:"running"`
+	// OpenFailures are instances that never ran: their state could not be
+	// opened or no enrollment token could be fetched. They are missing
+	// from results.jsonl, so the checker cannot see them.
+	OpenFailures int64 `json:"open_failures"`
+	// RunFailures are instances that stopped with an error.
+	RunFailures int64 `json:"run_failures"`
 }
 
 // Runner owns the devices.
@@ -85,6 +103,8 @@ type Runner struct {
 	mu      sync.Mutex
 	devices []*agent.Device
 	tokens  []string
+
+	started, running, openFailed, runFailed atomic.Int64
 }
 
 // New prepares a runner.
@@ -94,9 +114,28 @@ func New(opts Options, log *slog.Logger, reg prometheus.Registerer) *Runner {
 		Running:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "fleetwire_loadgen_devices_running", Help: "Device instances running."}),
 		Enrolled: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_loadgen_devices_started_total", Help: "Device instances started."}),
 		Failed:   prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_loadgen_device_failures_total", Help: "Device instances that stopped with an error."}),
+		OpenFailed: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_loadgen_device_open_failures_total",
+			Help: "Device instances that could not be opened or given an enrollment token, and never ran."}),
 	}
-	reg.MustRegister(r.m.Running, r.m.Enrolled, r.m.Failed)
+	reg.MustRegister(r.m.Running, r.m.Enrolled, r.m.Failed, r.m.OpenFailed)
 	return r
+}
+
+// Stats returns the current counts.
+func (r *Runner) Stats() Stats {
+	return Stats{Devices: r.opts.Devices, Started: r.started.Load(), Running: r.running.Load(),
+		OpenFailures: r.openFailed.Load(), RunFailures: r.runFailed.Load()}
+}
+
+// ServeStatus serves Stats as JSON (GET /status on the metrics listener).
+func (r *Runner) ServeStatus(w http.ResponseWriter, _ *http.Request) {
+	b, err := json.Marshal(r.Stats())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(b)
 }
 
 // enrollmentToken returns a fresh token, fetching them from the API in
@@ -191,7 +230,9 @@ func (r *Runner) deviceConfig(token string) config.Config {
 
 // Run starts the devices at the ramp rate, collects for Duration (or until
 // ctx ends), then stops collecting, waits for the drain, and writes
-// results.jsonl.
+// results.jsonl. It returns an error, after writing results.jsonl, when a
+// device could not be opened: the run then has fewer devices than asked
+// for, and the ones missing are not in the results.
 func (r *Runner) Run(ctx context.Context) error {
 	if err := os.MkdirAll(r.opts.StateDir, 0o700); err != nil {
 		return err
@@ -199,7 +240,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	runCtx, stopDevices := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopDevices()
 	var wg sync.WaitGroup
-	var started atomic.Int64
 	collectEnd := time.NewTimer(r.opts.Duration)
 	defer collectEnd.Stop()
 
@@ -217,25 +257,31 @@ ramp:
 		}
 		dev, err := r.open(ctx, i)
 		if err != nil {
-			r.m.Failed.Inc()
+			r.openFailed.Add(1)
+			r.m.OpenFailed.Inc()
 			r.log.Error("device did not start", "index", i, "err", err)
 			continue
 		}
 		r.mu.Lock()
 		r.devices = append(r.devices, dev)
 		r.mu.Unlock()
-		started.Add(1)
+		r.started.Add(1)
+		r.running.Add(1)
 		r.m.Enrolled.Inc()
 		r.m.Running.Inc()
 		wg.Go(func() {
-			defer r.m.Running.Dec()
+			defer func() {
+				r.running.Add(-1)
+				r.m.Running.Dec()
+			}()
 			if err := dev.Run(runCtx); err != nil {
+				r.runFailed.Add(1)
 				r.m.Failed.Inc()
 				r.log.Error("device stopped with an error", "index", i, "err", err)
 			}
 		})
 	}
-	r.log.Info("all devices started", "started", started.Load())
+	r.log.Info("all devices started", "started", r.started.Load(), "failed", r.openFailed.Load())
 	select {
 	case <-ctx.Done():
 	case <-collectEnd.C:
@@ -269,7 +315,13 @@ ramp:
 	}
 	stopDevices()
 	wg.Wait()
-	return writeResults(filepath.Join(r.opts.StateDir, "results.jsonl"), results)
+	if err := writeResults(filepath.Join(r.opts.StateDir, "results.jsonl"), results); err != nil {
+		return err
+	}
+	if n := r.openFailed.Load(); n > 0 {
+		return fmt.Errorf("%d of %d devices did not start (see the log); results.jsonl lists only the %d that ran", n, r.opts.Devices, len(results))
+	}
+	return nil
 }
 
 // open restores device i from its state directory, or enrolls a new one.

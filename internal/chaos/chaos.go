@@ -2,11 +2,13 @@
 // writes the results table (R12.2, R12.4, design 15.3).
 //
 // Each scenario: wait for a healthy stack, create a fresh tenant, start the
-// load generator, keep steady load, inject the fault, hold it, recover,
-// measure how long until the p99 end-to-end delay is back under 5 s, keep
-// load a while longer, stop the load generator (it drains and writes
-// results.jsonl), and run the checker. A scenario passes only with 0
-// missing and 0 duplicates.
+// load generator and wait until every device runs, keep steady load,
+// inject the fault, hold it, recover, measure how long until the p99
+// end-to-end delay is back under 5 s, keep load a while longer, stop the
+// load generator (it drains and writes results.jsonl), and run the
+// checker. A scenario passes only with 0
+// missing and 0 duplicates, and with every device of the run in the
+// checker's report.
 package chaos
 
 import (
@@ -32,6 +34,7 @@ import (
 	"time"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/backoff"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/loadgen"
 )
 
 // Options for a chaos run.
@@ -150,10 +153,15 @@ var all = []scenario{
 		func(ctx context.Context, r *run) error { return r.compose(ctx, "kill", "-s", "KILL", "ingest-1") },
 		func(ctx context.Context, r *run) error { return r.compose(ctx, "start", "ingest-1") }},
 	{"agent-kill", 10 * time.Second,
-		func(_ context.Context, r *run) error { return r.loadgen.Process.Signal(syscall.SIGKILL) },
+		func(_ context.Context, r *run) error { return r.loadgen.cmd.Process.Signal(syscall.SIGKILL) },
 		func(ctx context.Context, r *run) error {
-			_ = r.loadgen.Wait()
-			return r.startLoadgen(ctx)
+			<-r.loadgen.done
+			if err := r.startLoadgen(ctx); err != nil {
+				return err
+			}
+			// Every device reopens its own state: one that cannot is the
+			// failure this scenario looks for, so wait for all of them.
+			return r.waitDevicesRunning(ctx, "after the restart")
 		}},
 }
 
@@ -168,10 +176,32 @@ type run struct {
 	// devDir is the load generator's state directory.
 	devDir    string
 	tenantTok string
-	loadgen   *exec.Cmd
+	loadgen   *process
 	logFile   *os.File
 	http      *http.Client
 	operator  string
+	// running is the number of devices the load generator runs, as of the
+	// last waitDevicesRunning.
+	running int
+	// problems fail the scenario even when the checker passes it.
+	problems []string
+}
+
+// process is a started command, waited for in the background so that an
+// early exit is seen while the runner polls.
+type process struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+	err  error // the result of Wait; read it after done is closed
+}
+
+func (p *process) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // Run executes the selected scenarios and writes the results.
@@ -213,8 +243,12 @@ func Run(ctx context.Context, o Options) ([]Row, error) {
 		}
 		row, err := r.scenario(ctx, sc)
 		if err != nil {
-			row.Note = err.Error()
+			row.Note = joinNote(row.Note, err.Error())
 			o.Log.Error("scenario failed to run", "scenario", name, "err", err)
+		}
+		if len(r.problems) > 0 {
+			row.Pass = false
+			row.Note = joinNote(row.Note, strings.Join(r.problems, "; "))
 		}
 		rows = append(rows, row)
 		o.Log.Info("scenario done", "scenario", name, "pass", row.Pass, "missing", row.Missing, "duplicates", row.Duplicates, "recovery", row.Recovery)
@@ -257,16 +291,18 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 		return row, err
 	}
 	defer func() {
-		if r.loadgen != nil && r.loadgen.ProcessState == nil {
-			_ = r.loadgen.Process.Kill()
+		if r.loadgen != nil && !r.loadgen.exited() {
+			_ = r.loadgen.cmd.Process.Kill()
+			<-r.loadgen.done
 		}
 		if r.logFile != nil {
 			_ = r.logFile.Close()
 		}
 	}()
-	if err := r.waitDevicesRunning(ctx); err != nil {
+	if err := r.waitDevicesRunning(ctx, "at the start"); err != nil {
 		return row, err
 	}
+	row.Devices = r.running
 	sleep(ctx, r.o.Steady)
 	r.o.Log.Info("injecting fault", "scenario", sc.name, "hold", sc.hold)
 	if err := sc.inject(ctx, r); err != nil {
@@ -281,13 +317,19 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 		row.Recovery = d.Round(time.Second).String()
 	} else {
 		row.Recovery = "> 10m"
-		row.Note = err.Error()
+		row.Note = joinNote(row.Note, err.Error())
 	}
 	if left := r.o.After - time.Since(recovered); left > 0 {
 		sleep(ctx, left)
 	}
 	if err := r.stopLoadgen(); err != nil {
-		return row, err
+		// The load generator exits with an error after writing
+		// results.jsonl when devices did not start; the devices that ran
+		// are still checked, and the row fails.
+		if _, serr := os.Stat(filepath.Join(r.devDir, "results.jsonl")); serr != nil {
+			return row, err
+		}
+		r.problems = append(r.problems, err.Error())
 	}
 	if err := r.waitHealthy(ctx, 5*time.Minute); err != nil {
 		return row, err
@@ -422,15 +464,23 @@ func (r *run) startLoadgen(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start loadgen: %w", err)
 	}
-	r.loadgen = cmd
+	p := &process{cmd: cmd, done: make(chan struct{})}
+	go func() {
+		p.err = cmd.Wait()
+		close(p.done)
+	}()
+	r.loadgen = p
 	return nil
 }
 
 func (r *run) stopLoadgen() error {
-	if err := r.loadgen.Process.Signal(syscall.SIGTERM); err != nil {
-		return err
+	if !r.loadgen.exited() {
+		if err := r.loadgen.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			return fmt.Errorf("stop loadgen: %w", err)
+		}
 	}
-	if err := r.loadgen.Wait(); err != nil {
+	<-r.loadgen.done
+	if err := r.loadgen.err; err != nil {
 		return fmt.Errorf("loadgen exited: %w (see %s)", err, filepath.Join(r.dir, "loadgen.log"))
 	}
 	return nil
@@ -458,12 +508,13 @@ func (r *run) check(ctx context.Context, row Row) (Row, error) {
 	if err := json.Unmarshal(data, &rep); err != nil {
 		return row, fmt.Errorf("checker report: %w", err)
 	}
-	return judge(row, rep), nil
+	return judge(row, rep, r.o.Devices), nil
 }
 
 // checkerReport is the part of fleetwire-checker's JSON report
 // (checker.Report) that the results use.
 type checkerReport struct {
+	Devices    int    `json:"devices"`
 	Readings   uint64 `json:"readings"`
 	Stored     uint64 `json:"stored"`
 	Missing    uint64 `json:"missing"`
@@ -474,12 +525,18 @@ type checkerReport struct {
 	Errors     int    `json:"errors"`
 }
 
-// judge copies the checker's counts into the row and decides the result.
-// Failures the table has no column for are spelled out in the note.
-func judge(row Row, rep checkerReport) Row {
+// judge copies the checker's counts into the row and decides the result;
+// devices is the number the run asked for. Failures the table has no
+// column for are spelled out in the note.
+func judge(row Row, rep checkerReport, devices int) Row {
+	row.Devices = rep.Devices
 	row.Readings, row.Stored, row.Missing, row.Duplicates = rep.Readings, rep.Stored, rep.Missing, rep.Duplicates
 	row.GapSeqs, row.Beyond, row.Unrecorded = rep.GapSeqs, rep.Beyond, rep.Unrecorded
 	var why []string
+	if rep.Devices != devices {
+		// A device missing from results.jsonl is one the checker never saw.
+		why = append(why, fmt.Sprintf("results list %d of %d devices", rep.Devices, devices))
+	}
 	if rep.Beyond > 0 {
 		why = append(why, fmt.Sprintf("%d stored seqs above the devices' last seq", rep.Beyond))
 	}
@@ -588,19 +645,66 @@ func (r *run) waitHealthy(ctx context.Context, timeout time.Duration) error {
 	}
 }
 
-func (r *run) waitDevicesRunning(ctx context.Context) error {
+// waitDevicesRunning waits until the load generator has tried to start
+// every device, and records how many run. Devices that did not start are a
+// problem of the scenario, which goes on so that the checker still reads
+// back the ones that did. when says which start this is, for the note.
+func (r *run) waitDevicesRunning(ctx context.Context, when string) error {
 	deadline := time.Now().Add(15 * time.Minute)
 	for time.Now().Before(deadline) && ctx.Err() == nil {
-		v, err := r.promValue(ctx, `max(fleetwire_loadgen_devices_running)`)
-		if err == nil && int(v) >= r.o.Devices {
-			return nil
+		if r.loadgen.exited() {
+			return fmt.Errorf("loadgen exited during start (%v; see %s)", r.loadgen.cmd.ProcessState, filepath.Join(r.dir, "loadgen.log"))
 		}
-		if r.loadgen.ProcessState != nil {
-			return fmt.Errorf("loadgen exited during start")
+		st, err := r.loadgenStats(ctx)
+		if err == nil {
+			if done, problem := rampDone(st, r.o.Devices); done {
+				r.running = int(st.Running)
+				if problem != "" {
+					r.problems = append(r.problems, problem+" "+when)
+					r.o.Log.Error("devices did not start", "when", when, "problem", problem)
+				}
+				return nil
+			}
 		}
-		sleep(ctx, 3*time.Second)
+		sleep(ctx, time.Second)
 	}
 	return fmt.Errorf("not all %d devices started in time", r.o.Devices)
+}
+
+// rampDone reports whether the load generator has tried every one of
+// devices, and describes the ones that are not running.
+func rampDone(st loadgen.Stats, devices int) (done bool, problem string) {
+	if st.Started+st.OpenFailures < int64(devices) {
+		return false, ""
+	}
+	if st.Running == int64(devices) {
+		return true, ""
+	}
+	return true, fmt.Sprintf("%d of %d devices running (%d did not start, %d stopped with an error)",
+		st.Running, devices, st.OpenFailures, st.RunFailures)
+}
+
+// loadgenStats reads the load generator's device counts from its /status.
+func (r *run) loadgenStats(ctx context.Context) (loadgen.Stats, error) {
+	var st loadgen.Stats
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+r.o.LoadgenListen+"/status", nil)
+	if err != nil {
+		return st, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return st, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return st, fmt.Errorf("loadgen status: HTTP %d", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return st, fmt.Errorf("decode loadgen status: %w", err)
+	}
+	return st, nil
 }
 
 // waitRecovered waits until the p99 end-to-end delay of newly stored

@@ -111,7 +111,7 @@ func writeResults(o Options, stamp, sha string, rows []Row) error {
 	if o.StateDir != "" {
 		cmdline += " -state-dir " + o.StateDir
 	}
-	md := fmt.Sprintf("# Failure test results %s\n\n- Commit: %#q\n- Machine: %s\n- Command: %#q\n- Load: %d devices, %d reading(s) every %s each, steady %s before and %s after each fault\n- Device state: %s\n\n%s\nRecovery is the time from the end of the fault until the p99 end-to-end delay of newly stored readings is under 5 s again. Raw logs, results.jsonl and checker reports are in `raw/%s/` (not committed).\n",
+	md := fmt.Sprintf("# Failure test results %s\n\n- Commit: %#q\n- Machine: %s\n- Command: %#q\n- Load: %d devices, %d reading(s) every %s each, steady %s before and %s after each fault\n- Device state: %s\n\n%s\nRecovery is the time from the end of the fault until the p99 end-to-end delay of newly stored readings is under 5 s again. Devices counts the devices the checker read back; a run with fewer than it asked for fails. Raw logs, results.jsonl and checker reports are in `raw/%s/` (not committed).\n",
 		stamp, sha, Machine(), cmdline, o.Devices, o.Readings, o.Interval, o.Steady, o.After, stateLocation(o), Table(rows), stamp)
 	if err := os.WriteFile(base+".md", []byte(md), 0o644); err != nil { //nolint:gosec // published results
 		return err

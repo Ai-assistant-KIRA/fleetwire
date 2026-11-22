@@ -14,10 +14,13 @@ $ bin/fleetwire-chaos list
 (`-steady`, `-after`, `-wal-sync`, `-interval`).
 
 Each scenario: wait for a healthy stack, create a fresh tenant, start the
-load generator, keep steady load (`-steady`, 60 s), inject the fault, hold
-it, recover, measure the recovery time, keep load for `-after` (60 s), stop
-the load generator (it drains and writes `results.jsonl`), and run the
-checker.
+load generator and wait until it has started every device, keep steady load
+(`-steady`, 60 s), inject the fault, hold it, recover, measure the recovery
+time, keep load for `-after` (60 s), stop the load generator (it drains and
+writes `results.jsonl`), and run the checker. A device that does not start
+(at the beginning, or when agent-kill restarts the load generator) fails
+the scenario, and so does a checker report with fewer devices than the run
+asked for.
 
 | Scenario | Fault | Recovery |
 |---|---|---|
