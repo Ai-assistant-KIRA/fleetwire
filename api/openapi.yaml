@@ -10,6 +10,9 @@ info:
     named on each operation; operator tokens (`fwo_`) reach `/v1/admin`.
     Requests are rate limited per token, and failed token lookups per
     client network (IPv4 address or IPv6 /64); a 429 carries Retry-After.
+    Both limits are checked before the token is looked up, and the token's
+    limit before its scopes, so a caller over a limit gets 429 where it
+    would otherwise get 401 or 403.
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -177,7 +180,9 @@ paths:
     post:
       tags: [tenant, devices]
       operationId: createEnrollmentTokens
-      description: "Scope: devices:admin. Each token enrolls one device, once."
+      description: >-
+        Scope: devices:admin. Each token enrolls one device, once. Tokens
+        are deleted 7 days after they expire, used or not.
       requestBody: {$ref: "#/components/requestBodies/EnrollmentTokens"}
       responses:
         "201": {$ref: "#/components/responses/EnrollmentTokens"}
@@ -311,7 +316,9 @@ paths:
       operationId: downloadExport
       description: >-
         Scope: exports:read. Gzip-compressed NDJSON, one reading per line.
-        Past expires_at the answer is 410 with code expired.
+        Past expires_at the answer is 410 with code expired. HEAD answers
+        with the same status and headers, Content-Digest included, and no
+        body.
       parameters: [{$ref: "#/components/parameters/id"}]
       responses:
         "200":
@@ -340,7 +347,8 @@ paths:
       description: >-
         Scope: the read scope of what the job works on. exports:read for
         export jobs, devices:read for device_purge, tenant:admin for
-        retention and tenant_destroy.
+        retention and tenant_destroy. Jobs are deleted 30 days after they
+        finish; after that the answer is 404.
       parameters: [{$ref: "#/components/parameters/id"}]
       responses:
         "200":
