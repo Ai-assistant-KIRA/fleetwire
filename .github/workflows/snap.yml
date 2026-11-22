@@ -25,10 +25,14 @@ jobs:
         env:
           SNAP_FILE: ${{ steps.snap.outputs.snap }}
         run: |
+          set -euo pipefail
           snap_version=$(unsquashfs -cat "$SNAP_FILE" meta/snap.yaml | awk '$1 == "version:" { print $2; exit }')
+          test -n "$snap_version"
           unsquashfs -cat "$SNAP_FILE" bin/fleetwire-agent > "$RUNNER_TEMP/fleetwire-agent"
           chmod +x "$RUNNER_TEMP/fleetwire-agent"
-          binary_version=$("$RUNNER_TEMP/fleetwire-agent" version | awk '{ print $1 }')
+          binary_output=$("$RUNNER_TEMP/fleetwire-agent" version)
+          binary_version=${binary_output%% *}
+          test -n "$binary_version"
           test "$binary_version" = "$snap_version" || {
             echo "snap version $snap_version does not match binary version $binary_version"
             exit 1
