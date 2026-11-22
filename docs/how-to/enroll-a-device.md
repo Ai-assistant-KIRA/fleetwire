@@ -49,11 +49,37 @@ the broker URL it receives. The token is not needed after that.
 
 ## If enrollment fails
 
-- `snap get`/`fleetwire-agent status` shows "enrollment refused": the token
-  is unknown, expired or already used. Create a new one and set it.
+Until enrollment succeeds, `fleetwire-agent status` shows no `device_id`,
+and `status -json` has `"enrolled": false`. The snap's health and the
+agent's log say why:
+
+```console
+$ snap info fleetwire-agent
+...
+health:
+  status:   blocked
+  message:  "enrollment refused: set a new enroll.token"
+...
+$ sudo snap logs -n 20 fleetwire-agent | grep enrollment
+```
+
+- Health `blocked`, "enrollment refused: set a new enroll.token" (and
+  `blocked` in the Notes column of `snap list`): the API answered with a
+  4xx error other than 429, or `enroll.ca-bundle` holds no certificate, so
+  a retry cannot succeed. The log line "enrollment refused; waiting for a
+  new token" carries the reason: `HTTP 401 invalid_token` when the token
+  is unknown, expired or already used, `HTTP 403 tenant_inactive` when the
+  tenant is destroyed or being destroyed. Create a new token and set it;
+  the configure hook restarts the agent, which tries again at once.
+- Health `waiting`, "enrollment failed; retrying": the API was unreachable
+  or answered 429 or 5xx. The agent retries every 30 s on its own; the log
+  line "enrollment failed; retrying" has the error.
 - The token was consumed but the response never arrived (network cut at the
   wrong moment): the server has a device that never connects. Revoke it and
   enroll again with a new token.
+
+Outside a snap there is no health; the same messages go to the log on
+standard error.
 
 ## Re-enrolling
 
