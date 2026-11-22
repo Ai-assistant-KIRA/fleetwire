@@ -131,7 +131,12 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = shutdownTracing(context.WithoutCancel(ctx)) }()
+	defer func() {
+		// An unreachable collector must not hold up the exit.
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = shutdownTracing(sctx)
+	}()
 	reg := telemetry.NewRegistry("fleetwire-api")
 
 	db, err := store.Connect(ctx, cfg.DatabaseURL, store.Options{
@@ -232,9 +237,16 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 		defer cancel()
 		return admin.Shutdown(sctx)
 	})
-	g.Go(func() error { pub.Run(gctx, cfg.CRLInterval); return nil })
+	// The CRL publisher stops only after the API listeners have drained:
+	// a revocation by a request that is still running must reach the CRL.
+	crlCtx, stopCRL := context.WithCancel(context.WithoutCancel(gctx))
+	defer stopCRL()
+	g.Go(func() error { pub.Run(crlCtx, cfg.CRLInterval); return nil })
 	g.Go(func() error { return worker.Run(gctx) })
-	g.Go(func() error { return srv.Serve(gctx) })
+	g.Go(func() error {
+		defer stopCRL()
+		return srv.Serve(gctx)
+	})
 	if internal != nil {
 		g.Go(func() error {
 			log.Info("keyring listener started", "addr", cfg.InternalListen)

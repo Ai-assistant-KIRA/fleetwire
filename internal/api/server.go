@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -222,7 +223,11 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.log.Info("api listening", "public", pubLn.Addr().String(), "device", devLn.Addr().String())
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error { s.runTouches(gctx); return nil })
+	// Token use is recorded until both listeners have drained, so the
+	// requests still running at shutdown are not dropped from it.
+	touchCtx, stopTouches := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopTouches()
+	g.Go(func() error { s.runTouches(touchCtx); return nil })
 	for _, p := range []struct {
 		srv *http.Server
 		ln  net.Listener
@@ -236,9 +241,17 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	g.Go(func() error {
 		<-gctx.Done()
+		defer stopTouches()
+		// The listeners drain at the same time, so each has the whole
+		// budget; one after the other, the second got what the first left.
 		sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), 30*time.Second)
 		defer cancel()
-		return errors.Join(pub.Shutdown(sctx), dev.Shutdown(sctx))
+		var pubErr, devErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { pubErr = pub.Shutdown(sctx) })
+		wg.Go(func() { devErr = dev.Shutdown(sctx) })
+		wg.Wait()
+		return errors.Join(pubErr, devErr)
 	})
 	return g.Wait()
 }
