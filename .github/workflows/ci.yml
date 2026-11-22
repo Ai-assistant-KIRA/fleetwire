@@ -138,4 +138,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - run: docker buildx build --build-arg BINARY=${{ matrix.binary }} --build-arg VERSION=${{ github.sha }} -t ${{ matrix.binary }}:ci .
+      - run: docker buildx build --load --build-arg BINARY=${{ matrix.binary }} --build-arg VERSION=${{ github.sha }} -t ${{ matrix.binary }}:ci .
+      # Grype checks the image's packages and the Go binary's modules and
+      # standard library against known vulnerabilities. A high or critical
+      # one that already has a fix fails the job; the table is in the log.
+      - uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ matrix.binary }}:ci
+          severity-cutoff: high
+          only-fixed: true
+          output-format: table
