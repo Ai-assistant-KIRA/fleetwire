@@ -58,8 +58,11 @@ func newFixture(t *testing.T, db *store.DB) fixture {
 	if err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
+	// The covered range is not consistent with the watermark; the store does
+	// not check, and the tests only need one row in device_ranges.
 	if err := write(t, db, f, store.IngestWrite{Chunks: []store.Chunk{f.chunk(1, 10)},
-		Gaps: []store.DeviceGap{{DeviceID: f.device, FromSeq: 11, ToSeq: 12, Reason: "DISK_BUDGET"}}}); err != nil {
+		Gaps:          []store.DeviceGap{{DeviceID: f.device, FromSeq: 11, ToSeq: 12, Reason: "DISK_BUDGET"}},
+		ReplaceRanges: true, Ranges: []coverage.Range{{Lo: 1, Hi: 12}}}); err != nil {
 		t.Fatalf("fixture data: %v", err)
 	}
 	return f
@@ -84,9 +87,37 @@ func write(t *testing.T, db *store.DB, f fixture, w store.IngestWrite) error {
 	})
 }
 
+// tenantTables is every table with tenant rows. TestTenantTablesAreListed
+// keeps it complete.
 var tenantTables = []string{
-	"tenants", "tenant_keys", "devices", "device_gaps", "chunks", "device_certs",
+	"tenants", "tenant_keys", "devices", "device_ranges", "device_gaps", "chunks", "device_certs",
 	"enrollment_tokens", "api_tokens", "jobs", "exports", "audit_log",
+}
+
+// TestTenantTablesAreListed fails when a table with a tenant_id column is
+// missing from tenantTables, so the isolation tests cannot silently skip a
+// new table.
+func TestTenantTablesAreListed(t *testing.T) {
+	conn, err := pgx.Connect(t.Context(), storetest.Start(t).OwnerURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(t.Context())
+	rows, err := conn.Query(t.Context(), `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_schema = 'fleetwire' AND column_name = 'tenant_id' ORDER BY table_name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withTenant, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range withTenant {
+		if !slices.Contains(tenantTables, table) {
+			t.Errorf("table %s has a tenant_id column but is not in tenantTables", table)
+		}
+	}
 }
 
 func countRows(ctx context.Context, t *testing.T, conn interface {
@@ -649,7 +680,7 @@ func TestGroupRuntimeRole(t *testing.T) {
 	if _, err := tx.Exec(ctx, `SELECT set_config('fleetwire.tenant_id', $1, true)`, a.tenant.String()); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"tenants", "devices", "chunks", "device_gaps", "tenant_keys"} {
+	for _, table := range []string{"tenants", "devices", "device_ranges", "chunks", "device_gaps", "tenant_keys"} {
 		if n := countRows(ctx, t, tx, table); n != 1 {
 			t.Errorf("%s: tenant %s sees %d rows, want its own 1", table, a.tenant, n)
 		}
