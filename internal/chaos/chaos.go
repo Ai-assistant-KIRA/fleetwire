@@ -3,10 +3,10 @@
 //
 // Each scenario: wait for a healthy stack, create a fresh tenant, start the
 // load generator and wait until every device runs, keep steady load,
-// inject the fault, hold it, recover, measure how long until the p99
-// end-to-end delay is back under 5 s, keep load a while longer, stop the
-// load generator (it drains and writes results.jsonl), and run the
-// checker. A scenario passes only with 0
+// inject the fault, hold it, recover, measure how long until every device
+// is connected and the p99 end-to-end delay is back under 5 s, keep load a
+// while longer, stop the load generator (it drains and writes
+// results.jsonl), and run the checker. A scenario passes only with 0
 // missing and 0 duplicates, and with every device of the run in the
 // checker's report.
 package chaos
@@ -309,17 +309,19 @@ func (r *run) scenario(ctx context.Context, sc *scenario) (row Row, err error) {
 		return row, fmt.Errorf("inject: %w", err)
 	}
 	sleep(ctx, sc.hold)
+	// Recovery is timed from the moment the runner starts to undo the
+	// fault: for agent-kill that includes reopening every device.
+	faultEnd := time.Now()
 	if err := sc.recover(ctx, r); err != nil {
 		return row, fmt.Errorf("recover: %w", err)
 	}
-	recovered := time.Now()
-	if d, err := r.waitRecovered(ctx, 10*time.Minute); err == nil {
+	if d, err := r.waitRecovered(ctx, faultEnd, 10*time.Minute); err == nil {
 		row.Recovery = d.Round(time.Second).String()
 	} else {
 		row.Recovery = "> 10m"
 		row.Note = joinNote(row.Note, err.Error())
 	}
-	if left := r.o.After - time.Since(recovered); left > 0 {
+	if left := r.o.After - time.Since(faultEnd); left > 0 {
 		sleep(ctx, left)
 	}
 	if err := r.stopLoadgen(); err != nil {
@@ -707,19 +709,98 @@ func (r *run) loadgenStats(ctx context.Context) (loadgen.Stats, error) {
 	return st, nil
 }
 
-// waitRecovered waits until the p99 end-to-end delay of newly stored
-// readings is under 5 s.
-func (r *run) waitRecovered(ctx context.Context, timeout time.Duration) (time.Duration, error) {
-	start := time.Now()
-	q := `histogram_quantile(0.99, sum(rate(fleetwire_ingest_e2e_delay_seconds_bucket[20s])) by (le))`
-	for time.Since(start) < timeout && ctx.Err() == nil {
-		v, err := r.promValue(ctx, q)
-		if err == nil && !math.IsNaN(v) && v < 5 {
-			return time.Since(start), nil
+const (
+	// maxDelay is the p99 end-to-end delay a recovered stack stays under.
+	maxDelay = 5.0
+	// delayWindow is the rate window of the p99 query once enough time
+	// has passed since the fault.
+	delayWindow = 20 * time.Second
+	// stableFor is how long the stack must stay recovered before the
+	// runner believes it. Devices reconnect with up to a minute of jittered
+	// backoff, so the first on-time readings can come from a few devices
+	// while the rest are still away.
+	stableFor = 30 * time.Second
+)
+
+// waitRecovered waits until every running device is connected and the p99
+// end-to-end delay of readings stored in the last 20 s, none of them
+// before faultEnd, is under 5 s, and both have held for stableFor. It
+// returns the time from faultEnd to the start of that stable stretch.
+func (r *run) waitRecovered(ctx context.Context, faultEnd time.Time, timeout time.Duration) (time.Duration, error) {
+	tr := recoveryTracker{faultEnd: faultEnd, devices: r.running, stable: stableFor}
+	for time.Since(faultEnd) < timeout && ctx.Err() == nil {
+		now := time.Now()
+		s := recoverySample{at: now, p99: math.NaN(), connected: math.NaN()}
+		if w, ok := postFaultWindow(now, faultEnd); ok {
+			if v, err := r.promValue(ctx, p99Query(w)); err == nil {
+				s.p99 = v
+			}
+		}
+		if v, err := r.promValue(ctx, `sum(fleetwire_agent_mqtt_connected)`); err == nil {
+			s.connected = v
+		}
+		if d, ok := tr.add(s); ok {
+			return d, nil
 		}
 		sleep(ctx, 2*time.Second)
 	}
-	return 0, fmt.Errorf("p99 delay not under 5s within %s", timeout)
+	return 0, fmt.Errorf("not recovered within %s (every device connected and p99 delay under 5s for %s)", timeout, stableFor)
+}
+
+// p99Query is the p99 end-to-end delay of readings stored in the last
+// window.
+func p99Query(window time.Duration) string {
+	return fmt.Sprintf(`histogram_quantile(0.99, sum(rate(fleetwire_ingest_e2e_delay_seconds_bucket[%ds])) by (le))`, int(window/time.Second))
+}
+
+// postFaultWindow is the rate window to query at now so that it holds
+// only samples scraped after faultEnd: a window reaching back into the
+// fault, or before it, can show the delay of a stack that was still
+// healthy. It grows to delayWindow; ok is false while it would be under a
+// second. Until it spans two scrapes Prometheus returns no data, which
+// counts as not recovered.
+func postFaultWindow(now, faultEnd time.Time) (time.Duration, bool) {
+	w := min(now.Sub(faultEnd).Truncate(time.Second), delayWindow)
+	return w, w >= time.Second
+}
+
+// recoverySample is one look at the stack after the fault.
+type recoverySample struct {
+	at time.Time
+	// p99 is NaN when no reading was stored in the window or the query
+	// failed.
+	p99 float64
+	// connected counts the devices with an MQTT connection; NaN when
+	// unknown.
+	connected float64
+}
+
+// recoveryTracker decides from successive samples when the stack has
+// recovered.
+type recoveryTracker struct {
+	faultEnd time.Time
+	devices  int
+	stable   time.Duration
+	// since is the first sample of the current run of good ones.
+	since time.Time
+}
+
+// add records a sample. Once the samples have been good for stable, it
+// returns the time from the fault's end to the first of them.
+func (t *recoveryTracker) add(s recoverySample) (time.Duration, bool) {
+	// A NaN compares false, so an unknown value is never good.
+	good := s.p99 < maxDelay && s.connected >= float64(t.devices)
+	if !good {
+		t.since = time.Time{}
+		return 0, false
+	}
+	if t.since.IsZero() {
+		t.since = s.at
+	}
+	if s.at.Sub(t.since) < t.stable {
+		return 0, false
+	}
+	return t.since.Sub(t.faultEnd), true
 }
 
 func (r *run) promValue(ctx context.Context, query string) (float64, error) {

@@ -16,11 +16,11 @@ $ bin/fleetwire-chaos list
 Each scenario: wait for a healthy stack, create a fresh tenant, start the
 load generator and wait until it has started every device, keep steady load
 (`-steady`, 60 s), inject the fault, hold it, recover, measure the recovery
-time, keep load for `-after` (60 s), stop the load generator (it drains and
-writes `results.jsonl`), and run the checker. A device that does not start
-(at the beginning, or when agent-kill restarts the load generator) fails
-the scenario, and so does a checker report with fewer devices than the run
-asked for.
+time, keep load until `-after` (60 s) has passed since the fault ended,
+stop the load generator (it drains and writes `results.jsonl`), and run the
+checker. A device that does not start (at the beginning, or when agent-kill
+restarts the load generator) fails the scenario, and so does a checker
+report with fewer devices than the run asked for.
 
 | Scenario | Fault | Recovery |
 |---|---|---|
@@ -34,10 +34,16 @@ asked for.
 | `ingest-kill` | SIGKILL `ingest-1`, 30 s | start it |
 | `agent-kill` | SIGKILL the whole load generator | restart it with the same state directory |
 
-**Recovery time** is the time from the end of the fault until the p99
-end-to-end delay of newly stored readings (from Prometheus, 20 s window) is
-under 5 s again. It includes the devices' reconnect backoff (full jitter, up
-to 60 s), so it is often close to a minute after long outages.
+**Recovery time** is the time from the end of the fault until every device
+is connected again and the p99 end-to-end delay of newly stored readings is
+under 5 s, both holding for 30 s; it is measured to the start of those 30 s.
+The p99 comes from Prometheus over a 20 s window that never reaches back
+before the end of the fault, so readings stored while the stack was still
+healthy cannot make a recovery look instant. Prometheus scrapes every 5 s,
+so the runner cannot see a recovery faster than about 5 to 10 s. For
+`agent-kill` the time includes reopening every device. It also includes the
+devices' reconnect backoff (full jitter, up to 60 s), so it is often close
+to a minute after long outages.
 
 Results go to `docs/results/<time>-<commit>.md` and `.json`. Raw logs,
 `results.jsonl` and checker reports go to `docs/results/raw/` (git-ignored).

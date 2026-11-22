@@ -2,8 +2,10 @@ package chaos
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/checker"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/loadgen"
@@ -78,5 +80,79 @@ func TestRampDone(t *testing.T) {
 		if done != c.done || problem != c.problem {
 			t.Errorf("rampDone(%+v) = %v, %q; want %v, %q", c.st, done, problem, c.done, c.problem)
 		}
+	}
+}
+
+// The p99 window must never reach back before the fault ended: a 20 s
+// window read right after the fault still holds the healthy minute before
+// it, which is how recovery used to come out as 0 s.
+func TestPostFaultWindow(t *testing.T) {
+	end := time.Unix(1000, 0)
+	for _, c := range []struct {
+		after time.Duration
+		want  time.Duration
+		ok    bool
+	}{
+		{0, 0, false},
+		{900 * time.Millisecond, 0, false},
+		{7900 * time.Millisecond, 7 * time.Second, true},
+		{20 * time.Second, 20 * time.Second, true},
+		{5 * time.Minute, 20 * time.Second, true},
+	} {
+		w, ok := postFaultWindow(end.Add(c.after), end)
+		if w != c.want || ok != c.ok {
+			t.Errorf("%s after the fault: window %s, %v; want %s, %v", c.after, w, ok, c.want, c.ok)
+		}
+		if ok && end.Add(c.after).Add(-w).Before(end) {
+			t.Errorf("%s after the fault: window %s reaches back before the fault", c.after, w)
+		}
+	}
+	if q := p99Query(7 * time.Second); !strings.Contains(q, "[7s]") {
+		t.Fatalf("p99Query = %s", q)
+	}
+}
+
+func TestRecoveryTracker(t *testing.T) {
+	end := time.Unix(1000, 0)
+	nan := math.NaN()
+	type obs struct {
+		at        time.Duration // after the fault
+		p99       float64
+		connected float64
+	}
+	for _, c := range []struct {
+		name string
+		obs  []obs
+		// want is the recovery reported at the last sample; -1: none yet.
+		want time.Duration
+	}{
+		{"no data yet is not recovered", []obs{{2 * time.Second, nan, 100}, {40 * time.Second, nan, 100}}, -1},
+		{"recovered from the first good sample once it held for 30 s",
+			[]obs{{6 * time.Second, 2, 100}, {20 * time.Second, 2, 100}, {36 * time.Second, 3, 100}}, 6 * time.Second},
+		{"not before the stretch is 30 s long", []obs{{6 * time.Second, 2, 100}, {35 * time.Second, 2, 100}}, -1},
+		{"a slow sample starts the stretch over",
+			[]obs{{6 * time.Second, 2, 100}, {20 * time.Second, 8, 100}, {24 * time.Second, 2, 100}, {54 * time.Second, 2, 100}}, 24 * time.Second},
+		{"a device still away is not recovered, however fast the others are",
+			[]obs{{6 * time.Second, 1, 99}, {60 * time.Second, 1, 99}}, -1},
+		{"an unknown connection count is not recovered", []obs{{6 * time.Second, 1, nan}, {60 * time.Second, 1, nan}}, -1},
+		{"a stall with no readings stored starts the stretch over",
+			[]obs{{6 * time.Second, 2, 100}, {20 * time.Second, nan, 100}, {30 * time.Second, 2, 100}, {60 * time.Second, 2, 100}}, 30 * time.Second},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tr := recoveryTracker{faultEnd: end, devices: 100, stable: 30 * time.Second}
+			got, ok := time.Duration(-1), false
+			for i, o := range c.obs {
+				d, done := tr.add(recoverySample{at: end.Add(o.at), p99: o.p99, connected: o.connected})
+				if done && i < len(c.obs)-1 {
+					t.Fatalf("recovered at sample %d of %d", i+1, len(c.obs))
+				}
+				if done {
+					got, ok = d, true
+				}
+			}
+			if (c.want < 0 && ok) || (c.want >= 0 && got != c.want) {
+				t.Fatalf("recovery %s (%v), want %s", got, ok, c.want)
+			}
+		})
 	}
 }
