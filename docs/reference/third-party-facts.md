@@ -64,6 +64,16 @@ its log and resends after the ack timeout, so the end-to-end guarantee holds.
 - The tracker is reset on reconnect. A produce callback that fires after a
   reconnect gets `ErrPacketNotFound`; the broker redelivers that message, it
   is produced again, and ingest removes the duplicate.
+- Nothing else resets it, so a message that is never acked holds back every
+  later PUBACK for as long as the connection lasts. franz-go v1.22.2 retries
+  produce errors itself without limit and fails a record only for errors it
+  cannot retry, such as a topic still unknown after four metadata attempts
+  (`UnknownTopicRetries`) or a denied authorization. The bridge therefore
+  writes such a message again with backoff until Kafka takes it. It stays in
+  `fleetwire_bridge_pending_acks`, and readiness fails while any message is
+  being written again. If the connection drops meanwhile, the bridge stops
+  writing that copy, because the broker redelivers it on the next
+  connection.
 - `markAsAcked` scans the tracker linearly, so the bridge caps the number of
   unacknowledged messages with the MQTT v5 Receive Maximum (1,000).
 
