@@ -129,6 +129,10 @@ def test_leader_creates_the_topics_once(ctx):
     calls = ctx.exec_history[CONTAINER]
     assert [c.command for c in calls] == [[BINARY, "ensure-topics"]]
     assert calls[0].environment["FLEETWIRE_KAFKA_REPLICATION"] == "3"
+    assert calls[0].environment["FLEETWIRE_KAFKA_PASSWORD"] == "kafka-password"
+    # It needs Kafka only: no database login, keyring or MQTT identity.
+    unneeded = ("FLEETWIRE_DATABASE", "FLEETWIRE_KEYRING", "FLEETWIRE_MQTT")
+    assert not [k for k in calls[0].environment if k.startswith(unneeded)]
     ctx.run(ctx.on.update_status(), first)
     assert len(ctx.exec_history[CONTAINER]) == 1
 
@@ -221,6 +225,8 @@ def test_no_workers_is_refused(ctx):
 
 def test_kafka_tls_uses_the_relation_ca(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(kafka={**KAFKA, "tls": "enabled", "tls-ca": "KAFKA CA"}))
+    (call,) = ctx.exec_history[CONTAINER]
+    assert call.environment["FLEETWIRE_KAFKA_TLS_CA_FILE"] == "/etc/fleetwire/pki/kafka-ca.pem"
     env = env_of(out)
     assert env["FLEETWIRE_KAFKA_TLS"] == "true"
     assert env["FLEETWIRE_KAFKA_TLS_CA_FILE"] == "/etc/fleetwire/pki/kafka-ca.pem"

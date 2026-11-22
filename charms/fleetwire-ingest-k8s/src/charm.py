@@ -39,6 +39,18 @@ RUNTIME_ROLE = "charmed_dml"
 TOPICS = "fleetwire.*"
 GROUP_PREFIX = "fleetwire-"
 PKI_FILES = {"tls-cert": "ingest.pem", "tls-key": "ingest.key", "ca-bundle": "ca-bundle.pem"}
+# All that ensure-topics reads: the Kafka connection and the replication
+# factor. It gets no database URL, keyring address or MQTT identity.
+TOPICS_ENV = (
+    "FLEETWIRE_KAFKA_BROKERS",
+    "FLEETWIRE_KAFKA_SASL_MECHANISM",
+    "FLEETWIRE_KAFKA_USERNAME",
+    "FLEETWIRE_KAFKA_PASSWORD",
+    "FLEETWIRE_KAFKA_TLS",
+    "FLEETWIRE_KAFKA_TLS_CA_FILE",
+    "FLEETWIRE_KAFKA_REPLICATION",
+    "FLEETWIRE_LOG_LEVEL",
+)
 # Database connections beyond one per worker, for tenant key and device
 # lookups in their own transactions and the readiness probe. 16 workers get
 # 20, the binary's default.
@@ -322,8 +334,9 @@ class FleetwireIngestCharm(ops.CharmBase):
             return True
         done = self._topics_key(kafka)
         self.unit.status = ops.MaintenanceStatus("creating Kafka topics")
+        topics_env = {k: v for k, v in env.items() if k in TOPICS_ENV}
         try:
-            self._container.exec([BINARY, "ensure-topics"], environment=env, timeout=600).wait_output()
+            self._container.exec([BINARY, "ensure-topics"], environment=topics_env, timeout=600).wait_output()
         except ops.pebble.ExecError as e:
             logger.error("ensure-topics failed (exit %s): %s", e.exit_code, e.stderr)
             return False
