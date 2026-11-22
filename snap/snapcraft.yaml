@@ -42,16 +42,30 @@ parts:
     build-packages: [git]
     build-snaps: [go/1.27/stable]
     override-pull: |
-      set -o pipefail
-      # Copy tracked and non-ignored local sources without generated VM state.
-      (
-        cd "${CRAFT_PROJECT_DIR}"
+      set -e -o pipefail
+      cd "${CRAFT_PROJECT_DIR}"
+      # Test for .git rather than ask git: a checkout that git refuses to
+      # read must fail the build, not quietly become version dev.
+      if [ -e .git ]; then
+        # Copy tracked and non-ignored local sources without generated VM
+        # state. A tracked file deleted in the working tree is skipped, so
+        # tar does not fail on it.
         git ls-files -z --cached --others --exclude-standard |
-          tar --no-recursion --null --files-from=- --create --file=-
-      ) | tar -xf - -C "${CRAFT_PART_SRC}"
-      # Resolve the version from the checked-out project, then reuse it for
-      # the snap metadata and the binary.
-      VERSION="$(git -C "${CRAFT_PROJECT_DIR}" describe --tags --always --dirty)"
+          while IFS= read -r -d '' f; do
+            if [ -e "$f" ] || [ -L "$f" ]; then printf '%s\0' "$f"; fi
+          done |
+          tar --no-recursion --null --files-from=- --create --file=- |
+          tar -xf - -C "${CRAFT_PART_SRC}"
+        # Resolve the version from the checked-out project, then reuse it
+        # for the snap metadata and the binary.
+        VERSION="$(git describe --tags --always --dirty)"
+      else
+        # Not a git checkout (an unpacked source archive): git cannot list
+        # the sources, so copy only what the agent build reads.
+        echo "no .git in ${CRAFT_PROJECT_DIR}: building version dev" >&2
+        tar --create --file=- go.mod go.sum cmd internal | tar -xf - -C "${CRAFT_PART_SRC}"
+        VERSION=dev
+      fi
       craftctl set version="${VERSION}"
     override-build: |
       VERSION="$(craftctl get version)"
