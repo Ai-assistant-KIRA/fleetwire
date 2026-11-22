@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"flag"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/api/apitest"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/pki/devpki"
@@ -243,5 +247,45 @@ func TestLimitSetsThePageSize(t *testing.T) {
 	}
 	if _, err := fwctlEnv(t, srv.URL, "device", "list", "-limit", "-1"); err == nil {
 		t.Fatal("negative -limit accepted")
+	}
+}
+
+// A download has no overall deadline, only one for a stall: a slow one
+// that keeps receiving data finishes, one that stops receiving fails.
+func TestDownloadStallTimeout(t *testing.T) {
+	old := stallTimeout
+	t.Cleanup(func() { stallTimeout = old })
+	stallTimeout = 300 * time.Millisecond
+	payload := bytes.Repeat([]byte("x"), 8)
+	sum := sha256.Sum256(payload)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Digest", "sha-256=:"+base64.StdEncoding.EncodeToString(sum[:])+":")
+		w.WriteHeader(http.StatusOK)
+		for i, b := range payload {
+			if strings.HasSuffix(r.URL.Path, "/stall/download") && i == 4 {
+				select {
+				case <-r.Context().Done():
+				case <-stop:
+				}
+				return
+			}
+			_, _ = w.Write([]byte{b})
+			http.NewResponseController(w).Flush()
+			time.Sleep(100 * time.Millisecond) // 800 ms in all, more than the stall timeout
+		}
+	}))
+	t.Cleanup(srv.Close)
+	dest := filepath.Join(t.TempDir(), "export")
+	if out, err := fwctlEnv(t, srv.URL, "export", "download", "slow", "-out", dest); err != nil || !strings.Contains(out, "sha-256 verified") {
+		t.Fatalf("slow download: %q, %v", out, err)
+	}
+	_, err := fwctlEnv(t, srv.URL, "export", "download", "stall", "-out", dest+"2")
+	if !errors.Is(err, errStalled) {
+		t.Fatalf("stalled download: %v, want errStalled", err)
+	}
+	if _, err := os.Stat(dest + "2"); !os.IsNotExist(err) {
+		t.Fatalf("stalled download left a file: %v", err)
 	}
 }

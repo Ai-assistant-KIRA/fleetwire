@@ -96,6 +96,15 @@ type cli struct {
 	out    io.Writer
 }
 
+// requestTimeout bounds an API call other than a download. The API stops
+// writing a response after 60 s.
+const requestTimeout = 2 * time.Minute
+
+// stallTimeout ends a download that has received nothing for this long. A
+// download has no overall deadline: the API allows an hour. A variable for
+// the tests.
+var stallTimeout = 2 * time.Minute
+
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) error {
 	gfs := flag.NewFlagSet("fwctl", flag.ContinueOnError)
 	gfs.SetOutput(stderr)
@@ -140,8 +149,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		base:   strings.TrimSuffix(*base, "/"),
 		token:  *token,
 		output: *output,
-		http:   &http.Client{Timeout: 10 * time.Minute, Transport: &http.Transport{TLSClientConfig: tlsCfg}},
-		out:    stdout,
+		// No Client.Timeout: it would also cut off a long download. API
+		// calls get requestTimeout in do, downloads a stall timeout.
+		http: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg,
+			TLSHandshakeTimeout: 30 * time.Second, ResponseHeaderTimeout: requestTimeout}},
+		out: stdout,
 	}
 	group, cmd, cargs := rest[0], rest[1], rest[2:]
 	all := flag.NewFlagSet("fwctl", flag.ContinueOnError)
@@ -506,6 +518,8 @@ func (c *cli) request(ctx context.Context, method, path string, body any) (*http
 }
 
 func (c *cli) do(ctx context.Context, method, path string, body any) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	resp, err := c.request(ctx, method, path, body)
 	if err != nil {
 		return nil, err
@@ -658,14 +672,40 @@ func cell(v any) string {
 	return fmt.Sprint(v)
 }
 
+// errStalled ends a download that receives nothing for stallTimeout.
+var errStalled = errors.New("download stalled")
+
+// stallReader resets its timer whenever data arrives.
+type stallReader struct {
+	r     io.Reader
+	timer *time.Timer
+	d     time.Duration
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.timer.Reset(s.d)
+	}
+	return n, err
+}
+
 // download writes the export to path and checks it against the
-// Content-Digest header (RFC 9530) before keeping it.
+// Content-Digest header (RFC 9530) before keeping it. It has no overall
+// deadline, so a large export is not cut off; it gives up when nothing
+// arrives for stallTimeout.
 func (c *cli) download(ctx context.Context, path, dest string) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	resp, err := c.request(ctx, "GET", path, nil)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	stall := stallTimeout
+	timer := time.AfterFunc(stall, func() { cancel(fmt.Errorf("%w: nothing received for %s", errStalled, stall)) })
+	defer timer.Stop()
+	body := &stallReader{r: resp.Body, timer: timer, d: stall}
 	want, ok := strings.CutPrefix(resp.Header.Get("Content-Digest"), "sha-256=:")
 	want, ok2 := strings.CutSuffix(want, ":")
 	if !ok || !ok2 {
@@ -677,9 +717,12 @@ func (c *cli) download(ctx context.Context, path, dest string) error {
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), resp.Body)
+	n, err := io.Copy(io.MultiWriter(tmp, h), body)
 	if err != nil {
 		_ = tmp.Close()
+		if cause := context.Cause(ctx); errors.Is(cause, errStalled) {
+			return cause
+		}
 		return fmt.Errorf("download: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
