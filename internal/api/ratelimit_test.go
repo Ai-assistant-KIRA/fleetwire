@@ -106,7 +106,7 @@ func TestCRLIsRateLimited(t *testing.T) {
 	problem(t, resp, body, http.StatusTooManyRequests, "rate_limited")
 }
 
-// Refusals are audited (R4.4) at a bounded rate: once per window for a
+// Refusals are audited at a bounded rate: once per window for a
 // network sending tokens that match nothing, and once per window for each
 // known token. The metric counts every refusal.
 func TestEnrollmentRefusalsAreAuditedOncePerWindow(t *testing.T) {

@@ -84,7 +84,7 @@ func internalError() *apiError {
 	return &apiError{status: http.StatusInternalServerError, code: "internal", detail: "internal error; see the server log for this request ID"}
 }
 
-// maxBody bounds every request body (design 12.2).
+// maxBody bounds every request body.
 const maxBody = 1 << 20
 
 // decodeJSON reads exactly one JSON object with no unknown fields.

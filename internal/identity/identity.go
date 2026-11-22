@@ -3,7 +3,7 @@
 // Files in the identity directory (0700):
 //
 //	key.pem      ECDSA P-256 private key, PKCS#8 (0600). Created on first
-//	             start and never sent anywhere (R4.1).
+//	             start and never sent anywhere.
 //	cert.pem     current device certificate chain
 //	ca.pem       CA bundle for the broker and the API
 //	device.json  device ID, broker URL and API URL from enrollment

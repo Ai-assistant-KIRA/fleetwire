@@ -5,7 +5,7 @@
 // uplink. Segments are deleted only once the state file holds an ack that
 // covers them, so a seq that left the device is always either still on disk,
 // covered by the persisted ack, or inside a gap that is reported to the
-// server (invariant W1 in the design).
+// server. The rest of this package calls that the log's invariant.
 package wal
 
 import (
@@ -121,7 +121,7 @@ type AckResult struct {
 	// Advanced is false for an ack at or below the current one.
 	Advanced bool
 	// Jumped is true when the server's ack was at or above the next seq the
-	// device would hand out, so the next seq moved past it (R3.8).
+	// device would hand out, so the next seq moved past it.
 	Jumped bool
 	// OldNext is the next seq before a jump.
 	OldNext uint64
@@ -518,7 +518,7 @@ func (l *Log) roll(first uint64) error {
 
 // enforceBudgetLocked drops the oldest sealed segments while the log is over
 // its size budget. Seqs that were not acked yet become a DISK_BUDGET gap,
-// which is persisted before the file is deleted (W1).
+// which is persisted before the file is deleted (the log's invariant).
 func (l *Log) enforceBudgetLocked() {
 	for len(l.segs) > 1 && l.totalBytes() > l.opts.MaxSize {
 		old := l.segs[0]
@@ -771,7 +771,8 @@ func (l *Log) persistLocked() error {
 }
 
 // deleteAckedLocked removes sealed segments covered by the persisted ack.
-// It uses l.persisted, never l.state, which is what makes W1 hold.
+// It uses l.persisted, never l.state, which is what keeps the log's
+// invariant.
 func (l *Log) deleteAckedLocked() error {
 	removed := 0
 	for len(l.segs) > 1 {

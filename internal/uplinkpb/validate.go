@@ -16,7 +16,7 @@ import (
 	fleetwirev1 "github.com/Ai-assistant-KIRA/fleetwire/internal/gen/fleetwirev1"
 )
 
-// Limits from the design (section 5.2).
+// Limits on one uplink batch.
 const (
 	SchemaVersion   = 1
 	MaxMessageBytes = 256 << 10

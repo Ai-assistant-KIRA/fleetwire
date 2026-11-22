@@ -7,11 +7,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Refused enrollments are audited (R4.4), but the audit log is append-only
+// Refused enrollments are audited, but the audit log is append-only
 // and enrollment needs no credentials, so made-up tokens must not be able
 // to grow it without limit. Each known token, or each client network when
 // the token matches nothing, gets one entry per refusalAuditEvery, like
-// ingest's drop entries (R6.6). Entries that match no tenant also share a
+// ingest's drop entries. Entries that match no tenant also share a
 // fleet-wide budget, since an attacker can use many networks.
 // fleetwire_api_enroll_refusals_total counts every refusal.
 const (

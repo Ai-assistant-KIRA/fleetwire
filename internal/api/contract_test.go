@@ -117,7 +117,7 @@ func (c *contract) unexercised() []string {
 
 // TestResponsesMatchOpenAPI calls every documented operation, success and
 // error paths, and validates each response, and each accepted request,
-// against the spec (R8.5).
+// against the spec.
 func TestResponsesMatchOpenAPI(t *testing.T) {
 	h := apitest.New(t)
 	c := newContract(t, h)

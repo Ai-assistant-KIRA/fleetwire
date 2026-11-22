@@ -111,7 +111,8 @@ func readBack(t *testing.T, h *apitest.Harness, tenant, device uuid.UUID) (store
 
 // TestExactlyOnceUnderRepeatsReorderAndConcurrency sends random batches and
 // gap reports, each several times, in random order, from four concurrent
-// workers, and checks P1 and P2 against the decrypted database content.
+// workers, and checks against the decrypted database content that every seq
+// is covered exactly once and the watermark is right.
 func TestExactlyOnceUnderRepeatsReorderAndConcurrency(t *testing.T) {
 	h, p, tenant, device, _ := setup(t)
 	seed := uint64(time.Now().UnixNano())

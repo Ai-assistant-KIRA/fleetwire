@@ -1,11 +1,11 @@
-// Package bridge moves device messages from Mosquitto into Kafka (R5).
+// Package bridge moves device messages from Mosquitto into Kafka.
 //
 // Each MQTT message is acknowledged to Mosquitto only after Kafka has
 // confirmed the write with acks=all. paho sends PUBACKs strictly in arrival
-// order (checked in task 0.2), so one slow write holds back every later
+// order (see docs/reference/third-party-facts.md), so one slow write holds back every later
 // PUBACK; once the receive maximum is reached Mosquitto stops sending and
 // queues in the persistent session. That is the backpressure when Kafka is
-// slow or down (R5.5).
+// slow or down.
 //
 // franz-go retries most produce errors itself and fails a record only for
 // errors it cannot retry, such as a topic that stays unknown or a denied
@@ -104,7 +104,7 @@ func New(cfg Config, log *slog.Logger, reg prometheus.Registerer) (*Bridge, erro
 		kgo.ClientID(b.cfg.ClientID),
 		kgo.DefaultProduceTopic(b.cfg.Topic),
 		// acks=all and idempotence are the franz-go defaults; stated here
-		// because the guarantee depends on them (R5.3).
+		// because the guarantee depends on them.
 		kgo.RequiredAcks(kgo.AllISRAcks()),
 		kgo.ProducerLinger(5*time.Millisecond),
 		kgo.ProducerBatchCompression(kgo.Lz4Compression()),
@@ -355,7 +355,7 @@ func (b *Bridge) subscribe(ctx context.Context, cm *autopaho.ConnectionManager, 
 }
 
 // Ready reports whether the bridge is subscribed and Kafka is accepting
-// writes (R5.5).
+// writes.
 func (b *Bridge) Ready(context.Context) error {
 	if !b.connected.Load() {
 		return errors.New("not subscribed to the broker")

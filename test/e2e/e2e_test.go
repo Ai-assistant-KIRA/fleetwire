@@ -456,7 +456,7 @@ func ingestDropsRevoked(t *testing.T) float64 {
 }
 
 // TestRevokeDropsReadingsFromAConnectedDevice covers revocation layer 1
-// (R4.6). The broker checks the CRL only when a connection is made, so a
+// (ingest, ADR-0010). The broker checks the CRL only when a connection is made, so a
 // device that stays connected keeps publishing after it is revoked; ingest
 // must store none of it from the revoke's commit on, and audit the drop.
 // TestEndToEnd stops its agent before the revoke and so never gets here.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Power-off test (R12.3): collect fast, hard-reset the VM through QMP
+# Power-off test: collect fast, hard-reset the VM through QMP
 # (no clean shutdown, like pulling the plug) N times at random moments, then
 # let the agent drain and run the checker for the device.
 #

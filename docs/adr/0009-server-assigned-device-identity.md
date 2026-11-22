@@ -10,12 +10,12 @@ broker ACL pins topics to it, ingest finds the tenant through it, and the API
 scopes data by it. If a device could choose its ID, one stolen enrollment
 token would let an attacker claim another device's name, or a service name
 such as `fleetwire-ingest`, which the broker ACL allows to publish acks for
-every device (R4.3, R4.8, R4.9).
+every device.
 
 ## Decision
 
-- The device creates its own ECDSA P-256 key and never sends it anywhere
-  (R4.1). It sends a CSR with a one-time enrollment token.
+- The device creates its own ECDSA P-256 key and never sends it anywhere.
+  It sends a CSR with a one-time enrollment token.
 - The API generates the device ID (UUIDv7) and signs a certificate with
   `CN=<id>` and the SAN `URI:urn:fleetwire:device:<id>`. The CSR subject is
   ignored; only its public key and signature are used.

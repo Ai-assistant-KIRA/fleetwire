@@ -13,7 +13,7 @@ import (
 
 // Sampler runs every collector once per interval, each in its own
 // goroutine with a timeout, so one slow or failing collector never holds
-// back the others (R1.4).
+// back the others.
 type Sampler struct {
 	collectors []collect.Collector
 	timeout    time.Duration

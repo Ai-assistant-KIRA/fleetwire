@@ -146,8 +146,8 @@ func TestRuntimeRoleIsUnprivileged(t *testing.T) {
 	}
 }
 
-// TestCrossTenantSQL is P7 at the SQL level: inside tenant A's transaction,
-// nothing of tenant B can be read, changed, deleted, or created.
+// TestCrossTenantSQL: inside tenant A's transaction, nothing of tenant B
+// can be read, changed, deleted, or created.
 func TestCrossTenantSQL(t *testing.T) {
 	db := storetest.AppDB(t)
 	a, b := newFixture(t, db), newFixture(t, db)

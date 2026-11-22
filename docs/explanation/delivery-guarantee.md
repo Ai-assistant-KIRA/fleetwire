@@ -17,7 +17,7 @@ The proof has three parts.
 1. **The device never forgets a sent seq until the end-to-end ack covers
    it.** Readings stay in the local log until the ack says "every seq up to
    N is stored or a reported gap". Segments are deleted only below the
-   *persisted* ack (invariant W1, `internal/wal`), so a crash between
+   *persisted* ack (`internal/wal`), so a crash between
    receiving an ack and saving it only causes a resend.
 
 2. **Everything between the device and the database may lose or repeat.**
@@ -36,7 +36,7 @@ The device also guards its own seq counter: on start, the next seq is one
 past the highest seq it can prove was handed out (the log, the persisted
 ack, `max_seq_ever`, the pending gaps), and any hole in that range is
 reported as a `LOST` gap instead of being reused. When the server's ack is
-ahead of the device (a restored disk), the device jumps past it (R3.8).
+ahead of the device (a restored disk), the device jumps past it.
 
 ## What is not promised
 
@@ -50,9 +50,9 @@ ahead of the device (a restored disk), the device jumps past it (R3.8).
 
 ## How it is checked
 
-- Property tests: P1 and P2 for the coverage logic against a bitmap model,
-  P3 to P5 for the local log with simulated power cuts, P6 for encryption,
-  P7 for tenant isolation.
+- Property tests: the coverage logic against a bitmap model, the local log
+  with simulated power cuts, encryption with every sealed field tampered,
+  and tenant isolation in SQL and through the API.
 - An ingest test applies random batches and gaps, each up to three times, in
   random order, from four concurrent workers, and reads the decrypted
   database back.

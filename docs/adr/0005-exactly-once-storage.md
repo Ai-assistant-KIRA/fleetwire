@@ -7,9 +7,9 @@
 
 Delivery from device to database is at least once: the device resends until
 an end-to-end ack arrives, MQTT QoS 1 and Kafka may repeat messages, and two
-bridges may forward one device's messages in any order (R6.8). Storage must
-still hold each seq exactly once (R6.3), and the ack must say exactly how far
-the stored data is complete (R6.5).
+bridges may forward one device's messages in any order. Storage must
+still hold each seq exactly once, and the ack must say exactly how far
+the stored data is complete.
 
 ## Decision
 
@@ -22,7 +22,7 @@ the stored data is complete (R6.5).
   reported gaps, and moves the watermark over every range that now touches it
   (`coverage.Advance`). The interval logic is pure Go in `internal/coverage`,
   shared with the checker and tested with property tests against a bitmap
-  model (P1, P2) and a fuzz test.
+  model and a fuzz test.
 - The device row is locked `FOR UPDATE` at the start of the transaction, so
   two ingest instances working on repeats of the same batch serialize.
 - `chunks` has `EXCLUDE USING gist (device_id WITH =, int8range(seq_lo, seq_hi, '[]') WITH &&)`,

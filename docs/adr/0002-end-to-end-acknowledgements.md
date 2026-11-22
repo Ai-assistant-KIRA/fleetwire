@@ -11,7 +11,7 @@ in PostgreSQL. Each hop has its own acknowledgement (MQTT PUBACK, Kafka
 `acks=all`, a database commit), and each can lose or repeat a message during
 a failure: a broker restart, a killed process between "done" and "ack", a
 network cut after the write but before the reply. The promise is that every
-reading that left a device is stored exactly once (R6, R12).
+reading that left a device is stored exactly once.
 
 ## Decision
 
@@ -48,4 +48,4 @@ eventually available.
   overflow into reported gaps instead of silent loss (ADR-0004).
 - A lost ack costs a resend of an already stored range, which ingest turns
   into a no-op and a fresh ack.
-- The failure suite (R12) checks this claim by reading the stored data back.
+- The failure suite checks this claim by reading the stored data back.

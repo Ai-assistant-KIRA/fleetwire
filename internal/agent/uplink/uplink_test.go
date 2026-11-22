@@ -429,8 +429,9 @@ func TestPublishErrorsAreRetried(t *testing.T) {
 	})
 }
 
-// TestServerAckAheadMovesSeq is R3.8: the server's retained ack is above
-// the device's own last seq (for example after a disk restore).
+// TestServerAckAheadMovesSeq: when the server's retained ack is above the
+// device's own last seq (for example after a disk restore), the device moves
+// its next seq past the ack and saves that at once, so no seq is reused.
 func TestServerAckAheadMovesSeq(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := start(t, base, wal.Options{})

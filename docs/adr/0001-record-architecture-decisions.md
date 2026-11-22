@@ -22,9 +22,9 @@ one.
 
 ## Alternatives considered
 
-- **Design document only.** `design.md` explains how the system works, but it
-  is rewritten as the system changes, so it loses the alternatives and the
-  reasons a choice was made.
+- **A design document only.** A design document explains how the system
+  works, but it is rewritten as the system changes, so it loses the
+  alternatives and the reasons a choice was made.
 - **Wiki or issue tracker.** Decisions drift away from the code version they
   describe and are not reviewed with the change.
 

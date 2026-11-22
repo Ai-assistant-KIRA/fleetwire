@@ -83,8 +83,8 @@ From the snapd source (`overlord/hookstate/ctlcmd/health.go`): `set-health`
 "can be called from any hook, and even from the apps themselves". Rules: the
 message must be 7 to 70 characters (longer is cut), a code must be 3 to 30
 characters, and `okay` takes no message. `snapctl get -d` prints the snap's
-configuration as JSON and works from apps; it is checked again on a real
-core24 install in task 7.1.
+configuration as JSON and works from apps; the strict agent snap reads its
+configuration this way on Ubuntu Core 24.
 
 ## 5. Ubuntu Core 24 in QEMU
 
@@ -113,7 +113,7 @@ From the Charmhub API and Canonical's docs:
 
 ## 7. 10,000 mTLS MQTT connections from one process
 
-Measured in task 8.4 with the load generator and recorded in
+Measured with the load generator in the 10,000-device runs and recorded in
 `docs/results/`. Settings in place before the run: `nofile` 1,048,576 for
 all users, `fs.nr_open` 1,048,576, local port range 10240-65535, and
 Mosquitto `max_connections -1` with a matching container `ulimit`.

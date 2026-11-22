@@ -1,5 +1,5 @@
 // Package uplink sends durable readings from the local log and handles
-// end-to-end acks (design 6.3, R3).
+// end-to-end acks (ADR-0002).
 //
 // It is go-back-N: on every reconnect and on every ack timeout it starts
 // again right after the acked seq. Ingest stores out-of-order and repeated
@@ -85,7 +85,7 @@ func NewMetrics(reg prometheus.Registerer) *Metrics {
 		PublishErrors: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_agent_publish_errors_total", Help: "Publishes that failed or timed out."}),
 		ReadingsAcked: prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_agent_readings_acked_total", Help: "Seqs newly covered by end-to-end acks (gaps included)."}),
 		Resends:       prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_agent_resend_total", Help: "Times the agent went back to the acked seq after an ack timeout."}),
-		SeqJumps:      prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_agent_seq_jump_total", Help: "Times the server's ack was ahead of the device's next seq (R3.8)."}),
+		SeqJumps:      prometheus.NewCounter(prometheus.CounterOpts{Name: "fleetwire_agent_seq_jump_total", Help: "Times the server's ack was ahead of the device's next seq, so the seq moved forward."}),
 		Unacked:       prometheus.NewGauge(prometheus.GaugeOpts{Name: "fleetwire_agent_unacked_readings", Help: "Readings written to the log but not yet acked end to end."}),
 	}
 	reg.MustRegister(m.ReadingsSent, m.Batches, m.PublishErrors, m.ReadingsAcked, m.Resends, m.SeqJumps, m.Unacked)

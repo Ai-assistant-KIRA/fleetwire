@@ -1,6 +1,7 @@
 #!/bin/sh
 # Runs Mosquitto and reloads its CRL when the API replaces crl.pem.
-# Mosquitto 2.x rereads crlfile on SIGHUP (checked in task 0.2). The API
+# Mosquitto 2.x rereads crlfile on SIGHUP (see
+# docs/reference/third-party-facts.md). The API
 # writes the file by rename, so the inode changes on every publish.
 set -u
 conf=/mosquitto/config/mosquitto.conf

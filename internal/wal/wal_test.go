@@ -119,7 +119,7 @@ func TestOnlyDurableRecordsAreRead(t *testing.T) {
 	}
 }
 
-// TestTornTailAtEveryByte is P3: after a cut at any byte of the last
+// TestTornTailAtEveryByte: after a cut at any byte of the last
 // segment, recovery keeps exactly the records written completely before it.
 func TestTornTailAtEveryByte(t *testing.T) {
 	src := t.TempDir()
@@ -376,7 +376,8 @@ func TestInspectIsReadOnly(t *testing.T) {
 	}
 }
 
-// TestCheckpointDeletesOnlyPersistedAcked is P4.
+// TestCheckpointDeletesOnlyPersistedAcked: a checkpoint deletes only
+// segments that the persisted ack covers.
 func TestCheckpointDeletesOnlyPersistedAcked(t *testing.T) {
 	dir := t.TempDir()
 	l, _ := open(t, Options{Dir: dir, Sync: SyncAlways, SegmentSize: 256})
@@ -463,7 +464,7 @@ func powerCut(t *testing.T, l *Log) {
 	}
 }
 
-// TestNoSeqReuseAcrossCrashes is P5: across any mix of appends, sends, acks,
+// TestNoSeqReuseAcrossCrashes: across any mix of appends, sends, acks,
 // checkpoints, power cuts and restarts, no seq that left the device is ever
 // handed out again, and every sent seq stays on disk, acked, or in a gap.
 func TestNoSeqReuseAcrossCrashes(t *testing.T) {

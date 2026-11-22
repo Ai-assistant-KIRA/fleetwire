@@ -1,6 +1,6 @@
 // Package config is the agent's configuration: one set of keys, read from
 // `snapctl get -d` inside the snap, or from a JSON file and -set flags
-// outside it, and checked by one validation path in both cases (R10.4).
+// outside it, and checked by one validation path in both cases.
 //
 // Keys use the snap's dotted names (collect.interval, wal.max-size). In JSON
 // they nest: {"wal": {"max-size": "256MiB"}}.

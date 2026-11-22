@@ -239,8 +239,8 @@ func TestScopesAndTokenKinds(t *testing.T) {
 	problem(t, resp, body, http.StatusUnauthorized, "unauthorized")
 }
 
-// TestTenantIsolationThroughAPI is P7 through the API: tenant B's token
-// cannot see or change anything of tenant A through any endpoint.
+// TestTenantIsolationThroughAPI: tenant B's token cannot see or change
+// anything of tenant A through any endpoint.
 func TestTenantIsolationThroughAPI(t *testing.T) {
 	h := apitest.New(t)
 	tenantA, tokA := h.CreateTenant("tenant-a")

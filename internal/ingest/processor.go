@@ -1,4 +1,4 @@
-// Package ingest stores uplink batches exactly once (R6, ADR-0005).
+// Package ingest stores uplink batches exactly once (ADR-0005).
 //
 // For each batch, one transaction locks the device row, computes which seqs
 // are not covered yet, stores only those (encrypted with the tenant's data
@@ -59,7 +59,7 @@ type Outcome struct {
 // is lost because the device resends.
 var ErrOverlap = errors.New("ingest: chunk or gap overlaps stored data")
 
-// Metrics are the ingest metrics (R13.1).
+// Metrics are the ingest metrics.
 type Metrics struct {
 	Batches        *prometheus.CounterVec
 	ReadingsStored prometheus.Counter
@@ -128,7 +128,9 @@ func NewProcessor(db *store.DB, keys *tenantkey.Manager, log *slog.Logger, m *Me
 	}
 }
 
-// auditEvery rate-limits drop audit entries per device (R6.6).
+// auditEvery rate-limits drop audit entries per device, so a revoked or
+// unknown device that keeps sending cannot grow the append-only audit log
+// without limit.
 const auditEvery = 10 * time.Minute
 
 var gapReasons = map[fleetwirev1.GapReason]string{
@@ -189,7 +191,7 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 			return w, fmt.Errorf("device %s moved from tenant %s to %s; refusing", device, tenant, dev.TenantID)
 		}
 		if dev.DeviceStatus != store.DeviceActive || dev.TenantStatus != store.TenantActive {
-			// Revocation is effective from its commit on (R4.6, layer 1).
+			// Revocation is effective from its commit on (layer 1 in ADR-0010).
 			out.Result = ResultDroppedRevoked
 			if p.shouldAudit(device) {
 				a := dropAudit(device, "device "+dev.DeviceStatus+", tenant "+dev.TenantStatus)

@@ -1,5 +1,5 @@
 // Package chaos runs the failure scenarios against the Compose stack and
-// writes the results table (R12.2, R12.4, design 15.3).
+// writes the results table.
 //
 // Each scenario: wait for a healthy stack, create a fresh tenant, start the
 // load generator and wait until every device runs, keep steady load,

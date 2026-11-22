@@ -29,7 +29,7 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/tenantkey"
 )
 
-// Topic names and layout (design 7).
+// Topic names and layout.
 const (
 	UplinkTopic = "fleetwire.uplink.v1"
 	DLQTopic    = "fleetwire.uplink.dlq.v1"
@@ -112,7 +112,8 @@ func New(cfg Config, db *store.DB, keys *tenantkey.Manager, log *slog.Logger, re
 		kgo.ClientID("fleetwire-ingest-"+cfg.InstanceID),
 		kgo.ConsumerGroup(cfg.Group),
 		kgo.ConsumeTopics(cfg.Topic),
-		// Offsets are committed only after the database commit (R6.4).
+		// Offsets are committed only after the database commit, so a crash
+		// redelivers a batch instead of losing it.
 		kgo.DisableAutoCommit(),
 		kgo.BlockRebalanceOnPoll(),
 		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
@@ -258,7 +259,7 @@ func byDevice(records []*kgo.Record) [][]*kgo.Record {
 
 // processRecords handles the records of one poll: the records of one device
 // (the record key) in order, different devices in parallel on up to Workers
-// goroutines. Order is not needed for correctness (R6.8); keeping each
+// goroutines. Order is not needed for correctness (ADR-0005); keeping each
 // device's records in order keeps its row lock uncontended. Running a
 // partition's records one after another instead capped ingest at
 // partitions / transaction time: about 1,000 batches/s with 24 partitions

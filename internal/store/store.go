@@ -126,7 +126,7 @@ func (db *DB) CurrentRole(ctx context.Context) (role string, bypassRLS, superuse
 }
 
 // CheckRuntimeRole fails if the pool's role could bypass row-level security
-// or owns the fleetwire tables (R7.2).
+// or owns the fleetwire tables.
 func (db *DB) CheckRuntimeRole(ctx context.Context) error {
 	role, bypass, super, err := db.CurrentRole(ctx)
 	if err != nil {

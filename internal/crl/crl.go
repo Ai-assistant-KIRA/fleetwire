@@ -2,8 +2,9 @@
 //
 // The API builds the CRL from the database after every revocation and once
 // a day, signs it with the Device Issuing CA, and writes it atomically to a
-// file the broker reads. The broker picks it up on SIGHUP (checked in task
-// 0.2), which a watcher next to Mosquitto sends when the file changes.
+// file the broker reads. The broker picks it up on SIGHUP (see
+// docs/reference/third-party-facts.md), which a watcher next to Mosquitto
+// sends when the file changes.
 package crl
 
 import (

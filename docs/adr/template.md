@@ -10,8 +10,7 @@ orphan: true
 ## Context
 
 What forces are at play: the requirement, the constraint, the facts that were
-checked. Link the requirement numbers (R6.3) and any experiment that produced
-a fact.
+checked. Link any experiment or measurement that produced a fact.
 
 ## Decision
 

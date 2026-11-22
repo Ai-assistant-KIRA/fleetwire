@@ -10,7 +10,7 @@
 //	disk     statfs($SNAP_DATA)                        none
 //	thermal  /sys/class/thermal/thermal_zone*/{type,temp}  hardware-observe
 //
-// New sensors implement Collector; the core does not change (R1.3).
+// New sensors implement Collector; the core does not change.
 package collect
 
 import (
@@ -295,7 +295,7 @@ func sanitizeLabel(s string) string {
 
 // Synthetic generates values for the load generator: a sine wave plus
 // noise per metric. It is the only generated part of a load-generator
-// device; everything else is the real agent code (R11.5).
+// device; everything else is the real agent code.
 type Synthetic struct {
 	// Readings is how many values each collection emits.
 	Readings int

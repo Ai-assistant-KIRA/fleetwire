@@ -7,7 +7,7 @@
 
 Operators need to deploy, configure, relate and upgrade the backend (API,
 bridge, ingest, broker) together with PostgreSQL and Kafka, without copying
-connection strings and passwords between systems (R14). On Kubernetes each
+connection strings and passwords between systems. On Kubernetes each
 service runs in its own pod, so two things the Compose stack gets from a
 shared host are missing: a keyring directory that the API and ingest both
 read, and a CRL file that the API writes and Mosquitto reads.
@@ -97,7 +97,7 @@ roles.
   ReadWriteMany volume outside Juju would hold every tenant's KEK where both
   pods, and its backups, can read it.
 - **One charm for API and ingest.** One pod would share the directory, but
-  the two scale and fail differently, and R14 names separate charms.
+  the two scale and fail differently, so each has its own charm.
 - **The API pushes the CRL into the relation data.** It works for small
   lists but puts a growing blob in every relation change; a URL keeps the
   relation small and lets other brokers use the same endpoint.

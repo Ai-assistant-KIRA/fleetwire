@@ -51,8 +51,8 @@ type busyAck struct {
 // device resends, ingest finds the range covered, and offers the ack again.
 //
 // The retained ack must never move back: a device whose disk was restored
-// takes it as the server's watermark and moves its next seq past it
-// (R3.8), and seqs reused below the true watermark would be dropped as
+// takes it as the server's watermark and moves its next seq past it,
+// and seqs reused below the true watermark would be dropped as
 // duplicates. Within one instance, a device's acks are therefore published
 // one at a time; a worker skips a device whose previous ack is still in
 // flight. Across instances, the acks of a partition are published or

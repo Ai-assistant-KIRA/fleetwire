@@ -42,7 +42,7 @@ func setActor(ctx context.Context, actor string) {
 // recorder captures the status for logs and metrics. It also turns the
 // plain-text 404 and 405 replies of http.ServeMux (no route matched, so
 // r.Pattern is empty) into problem details, so every error the API sends
-// is RFC 9457 (R8.6). Handlers' own 404s have a pattern and pass through.
+// is RFC 9457. Handlers' own 404s have a pattern and pass through.
 type recorder struct {
 	http.ResponseWriter
 	req     *http.Request

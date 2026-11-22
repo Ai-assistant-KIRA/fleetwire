@@ -1,4 +1,4 @@
--- Row-level security (R7, ADR-0006).
+-- Row-level security (ADR-0006).
 --
 -- {{runtime_role}} is the role the services run as; store.Migrate replaces
 -- it with the configured name, quoted, before goose reads this file. It is

@@ -1,5 +1,5 @@
 -- SECURITY DEFINER lookups for the few operations that happen before the
--- tenant is known (design 11.3). Each runs as the owner with a fixed
+-- tenant is known. Each runs as the owner with a fixed
 -- search_path, returns only the columns its caller needs, and can be
 -- executed by the runtime role only.
 

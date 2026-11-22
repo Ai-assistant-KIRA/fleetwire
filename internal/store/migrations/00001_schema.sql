@@ -183,7 +183,7 @@ CREATE TABLE fleetwire.exports (
 );
 CREATE INDEX exports_by_tenant ON fleetwire.exports (tenant_id, created_at);
 
--- Append-only audit log (R9.6). See 00003 for the trigger that blocks
+-- Append-only audit log. See 00003 for the trigger that blocks
 -- updates and deletes.
 CREATE TABLE fleetwire.audit_log (
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

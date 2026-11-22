@@ -1,6 +1,6 @@
 # Copyright 2026 Reda Alaarabi
 # SPDX-License-Identifier: Apache-2.0
-"""Deploy the bundle on MicroK8s and check that a real agent's readings are stored (R14.4).
+"""Deploy the bundle on MicroK8s and check that a real agent's readings are stored.
 
 Needs the four charms packed and the service images pushed (charms/build.sh
 does both and prints the FLEETWIRE_IMAGES value to export), `make build` done

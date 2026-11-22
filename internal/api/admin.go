@@ -129,7 +129,7 @@ func (s *Server) listTenants(w http.ResponseWriter, r *http.Request, _ *principa
 
 // destroyTenant runs the first destroy step synchronously, so the tenant is
 // unusable when the call returns, and leaves the rest to a restartable job
-// (design 13.4).
+// (jobs.destroyTenant).
 func (s *Server) destroyTenant(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
 	id, e := pathID(r)
 	if e != nil {

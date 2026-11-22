@@ -5,7 +5,7 @@
 
 ## Context
 
-Each tenant must only ever see its own data (R7). Application checks alone
+Each tenant must only ever see its own data. Application checks alone
 fail the day one query forgets its `WHERE tenant_id = ...`. The same database
 also serves a few lookups that happen before the tenant is known: ingest
 learns the tenant from the device ID, enrollment from the token, the API from
@@ -66,7 +66,7 @@ the token ID.
 - Forgetting to set the tenant returns no rows instead of everything.
 - Every query on tenant tables pays for the policy predicate; the indexes
   lead with `tenant_id` or are selective on `device_id`.
-- Integration tests prove the isolation at the SQL level (P7): reads, updates,
+- Integration tests prove the isolation at the SQL level: reads, updates,
   deletes and inserts across tenants, the missing-tenant case on a reused
   connection, audit immutability for both roles, and single use of enrollment
   tokens under concurrency.

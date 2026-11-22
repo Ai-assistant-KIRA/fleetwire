@@ -37,7 +37,7 @@ func TestKnownAnswer(t *testing.T) {
 	}
 }
 
-// TestTamperEveryField is P6: Open(Seal(x)) == x, and changing any AAD
+// TestTamperEveryField: Open(Seal(x)) == x, and changing any AAD
 // field, the nonce, the key or any ciphertext bit makes Open fail.
 func TestTamperEveryField(t *testing.T) {
 	key, err := NewKey()

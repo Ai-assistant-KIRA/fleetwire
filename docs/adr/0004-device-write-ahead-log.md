@@ -6,8 +6,8 @@
 ## Context
 
 A device must not lose readings when the network, the backend, or the power
-fails (R2). It also must never give two different readings the same sequence
-number once either has left the device (R1.6), because ingest drops a seq it
+fails. It also must never give two different readings the same sequence
+number once either has left the device, because ingest drops a seq it
 already has as a duplicate. The agent runs on small Ubuntu Core devices with
 flash storage, where every fsync costs wear and latency.
 
@@ -24,7 +24,7 @@ flash storage, where every fsync costs wear and latency.
 - Agent state (`acked`, `max_seq_ever`, pending gaps) lives in `state.json`,
   replaced by write-temp, fsync, rename, fsync-dir.
 - A segment is deleted only when the **persisted** ack covers all of it
-  (invariant W1). The disk budget drops the oldest segment and records the
+  (`internal/wal`). The disk budget drops the oldest segment and records the
   unacked part as a gap, persisted before the delete.
 - On start, recovery truncates a torn tail in the last segment, quarantines
   damage in a middle segment as `*.corrupt` and reports a `CORRUPTION` gap, and
@@ -62,7 +62,7 @@ flash storage, where every fsync costs wear and latency.
   guessing, because starting from zero state could reuse seqs before the
   server's watermark is known. This is an operator action:
   [Recover a device's local log](../how-to/recover-device-state.md).
-- Tests: torn tail at every byte (P3), bit flips in middle segments, budget
-  gaps, deletion bounded by the persisted ack (P4), and a property test that
+- Tests: torn tail at every byte, bit flips in middle segments, budget
+  gaps, deletion bounded by the persisted ack, and a property test that
   mixes appends, sends, acks, checkpoints, power cuts and restarts and checks
-  that no sent seq is ever reused or lost without a gap (P5).
+  that no sent seq is ever reused or lost without a gap.

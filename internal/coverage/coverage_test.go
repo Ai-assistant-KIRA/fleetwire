@@ -92,10 +92,9 @@ func (s *server) apply(batch Range, gaps []Range) {
 	s.watermark, s.covered = Advance(s.watermark, s.covered, added)
 }
 
-// TestPropertyExactlyOnce checks P1 and P2 from the design: any batches and
-// gaps, applied in any order and any number of times, leave every seq of
-// their union covered exactly once, and the watermark is the largest N with
-// [1..N] fully covered.
+// TestPropertyExactlyOnce: any batches and gaps, applied in any order and
+// any number of times, leave every seq of their union covered exactly once,
+// and the watermark is the largest N with [1..N] fully covered.
 func TestPropertyExactlyOnce(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		const maxSeq = 200
@@ -129,7 +128,7 @@ func TestPropertyExactlyOnce(t *testing.T) {
 					union[q] = true
 				}
 			}
-			// P2 after every step.
+			// The watermark property, after every step.
 			var want uint64
 			for union[want+1] {
 				want++

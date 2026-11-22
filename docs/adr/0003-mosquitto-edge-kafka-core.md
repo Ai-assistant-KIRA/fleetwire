@@ -6,10 +6,10 @@
 ## Context
 
 Devices need a protocol that is cheap on small hardware, keeps a session
-across flaky links, and authenticates each device with a client certificate
-(R3, R4.7). The backend needs a durable, replayable log that several ingest
-instances can share, that absorbs bursts, and that keeps data while the
-database is down (R5, R6.7).
+across flaky links, and authenticates each device with a client certificate.
+The backend needs a durable, replayable log that several ingest instances
+can share, that absorbs bursts, and that keeps data while the database is
+down.
 
 ## Decision
 
@@ -44,7 +44,8 @@ database is down (R5, R6.7).
 - Two systems to operate. In production they come from the Kafka charm and
   the Mosquitto charm (ADR-0012).
 - A bridge share that is offline keeps its messages queued in Mosquitto
-  until it returns (checked in task 0.2); the chaos runner restarts killed
-  bridges, and the per-client queue limit is raised.
+  until it returns (see [third-party facts](../reference/third-party-facts.md));
+  the chaos runner restarts killed bridges, and the per-client queue limit
+  is raised.
 - Message order is not guaranteed end to end with two bridges; ingest does
   not need it (ADR-0005).

@@ -1,5 +1,5 @@
 // Package checker proves the delivery guarantee by reading the stored data
-// back (R12.1, design 15.2).
+// back.
 //
 // For every device it decrypts every chunk and marks each stored seq in a
 // bitmap, so a seq stored twice is seen even if the database constraint

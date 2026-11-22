@@ -1,6 +1,6 @@
 #!/bin/sh
 # Runs on install and on every `snap set`. A non-zero exit makes snapd
-# refuse the change, so bad values never reach the daemon (R10.4). The check
+# refuse the change, so bad values never reach the daemon. The check
 # uses the same parser and rules as the daemon itself.
 set -eu
 "$SNAP/bin/fleetwire-agent" config check

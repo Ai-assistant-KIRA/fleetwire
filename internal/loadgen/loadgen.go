@@ -1,4 +1,4 @@
-// Package loadgen runs many devices in one process (R11).
+// Package loadgen runs many devices in one process.
 //
 // Every instance is an agent.Device built from the real agent packages: its
 // own local log on disk, its own key and certificate from the real

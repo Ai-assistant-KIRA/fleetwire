@@ -477,7 +477,7 @@ type destroyResult struct {
 	FilesGone   int   `json:"export_files_deleted"`
 }
 
-// destroyTenant finishes a tenant destroy (design 13.4). Each step checks
+// destroyTenant finishes a tenant destroy. Each step checks
 // the current state, so a crashed attempt continues where it stopped:
 //  1. tenant destroying, devices revoked, wrapped keys gone (normally done
 //     by the API call already);

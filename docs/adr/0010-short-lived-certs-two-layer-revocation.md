@@ -5,7 +5,7 @@
 
 ## Context
 
-An operator must be able to block one device at once (R4.6). TLS revocation
+An operator must be able to block one device at once. TLS revocation
 alone is slow and fragile: a broker only learns about a revocation when it
 reloads its CRL, it keeps connections that are already open, and an expired
 CRL makes OpenSSL reject every client.
@@ -13,7 +13,7 @@ CRL makes OpenSSL reject every client.
 ## Decision
 
 - Device certificates are valid 30 days and renewed over mutual TLS from two
-  thirds of their lifetime on (R4.5). Renewal must keep the same key, and the
+  thirds of their lifetime on. Renewal must keep the same key, and the
   device must be active.
 - **Layer 1, ingest (authoritative, immediate).** Revoking sets
   `devices.status = 'revoked'` and revokes the device's certificate rows in

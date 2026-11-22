@@ -6,8 +6,8 @@
 ## Context
 
 Tenants must be able to destroy their data, including copies in database
-backups (R9.5), and every stored reading must be encrypted with the tenant's
-own key (R9.4). The key design must allow a KMS or Vault backend later.
+backups, and every stored reading must be encrypted with the tenant's
+own key. The key design must allow a KMS or Vault backend later.
 
 ## Decision
 
