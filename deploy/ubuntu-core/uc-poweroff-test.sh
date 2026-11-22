@@ -14,7 +14,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 WORK=${UC_WORK:-work}
 N=${RESETS:-10}
-SSH=(ssh -p 8022 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 ${UC_SSH_KEY:+-i "$UC_SSH_KEY"} "${UC_USER:?set UC_USER}@localhost")
+SSH=(ssh -p 8022 -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
+if [ -n "${UC_SSH_KEY:-}" ]; then
+  SSH+=(-i "$UC_SSH_KEY")
+fi
+SSH+=("${UC_USER:?set UC_USER}@localhost")
 
 qmp() {
   printf '{"execute":"qmp_capabilities"}\n{"execute":"%s"}\n' "$1" | socat - UNIX-CONNECT:"$WORK/qmp.sock" >/dev/null
