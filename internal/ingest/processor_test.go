@@ -21,6 +21,7 @@ import (
 	fleetwirev1 "github.com/Ai-assistant-KIRA/fleetwire/internal/gen/fleetwirev1"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/ingest"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/uplinkpb"
 )
 
 type msg struct {
@@ -240,6 +241,29 @@ func TestInvalidBatchGoesToDLQ(t *testing.T) {
 		out, err := p.Process(t.Context(), device, []byte(raw), time.Now())
 		if err != nil || out.Result != ingest.ResultDLQ || out.Reason != reason {
 			t.Fatalf("got %+v, %v; want DLQ %s", out, err, reason)
+		}
+	}
+}
+
+// Seqs are bigint columns under int8range(lo, hi, '[]') constraints, which
+// PostgreSQL stores as [lo, hi+1). uplinkpb.MaxSeq is the highest seq that
+// fits: a reading and a gap there are stored, and a batch past it goes to
+// the DLQ before any database work.
+func TestHighestSeqIsStoredAndBeyondGoesToDLQ(t *testing.T) {
+	h, p, tenant, device, _ := setup(t)
+	top := uint64(uplinkpb.MaxSeq)
+	out, err := p.Process(t.Context(), device, encode(t, msg{first: top - 1, last: top - 1, gaps: [][2]uint64{{top, top}}}), time.Now())
+	if err != nil || out.Result != ingest.ResultStored || out.Stored != 1 || out.GapSeqs != 1 {
+		t.Fatalf("batch at MaxSeq: %+v, %v; want one reading and one gap seq stored", out, err)
+	}
+	stored, gaps, _ := readBack(t, h, tenant, device)
+	if stored[top-1] != 1 || gaps[top] != 1 {
+		t.Fatalf("stored %v, gaps %v", stored, gaps)
+	}
+	for _, m := range []msg{{first: top, last: top + 1}, {gaps: [][2]uint64{{top, top + 1}}}} {
+		out, err := p.Process(t.Context(), device, encode(t, m), time.Now())
+		if err != nil || out.Result != ingest.ResultDLQ || out.Reason != string(uplinkpb.ReasonSeqOverflow) {
+			t.Fatalf("batch past MaxSeq: %+v, %v; want DLQ %s", out, err, uplinkpb.ReasonSeqOverflow)
 		}
 	}
 }

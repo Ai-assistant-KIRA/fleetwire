@@ -24,6 +24,12 @@ const (
 	MaxGaps         = 1000
 	MaxLabels       = 16
 	MaxLabelBytes   = 128
+	// MaxSeq is the highest seq ingest can store. Seqs are PostgreSQL
+	// bigint columns, and the overlap constraints build
+	// int8range(lo, hi, '[]'), which PostgreSQL stores as [lo, hi+1), so
+	// hi+1 must fit in a bigint too. A larger seq is refused here, so it
+	// goes to the dead-letter topic without a database round trip.
+	MaxSeq = math.MaxInt64 - 1
 )
 
 var nameRE = regexp.MustCompile(`^[a-z0-9_.]{1,64}$`)
@@ -96,13 +102,16 @@ func Validate(b *fleetwirev1.Batch) error {
 		if b.GetFirstSeq() < 1 {
 			return invalid(ReasonFirstSeq, "first_seq must be at least 1")
 		}
-		if b.GetFirstSeq() > math.MaxUint64-uint64(n)+1 {
-			return invalid(ReasonSeqOverflow, "first_seq %d + %d readings overflows", b.GetFirstSeq(), n)
+		if b.GetFirstSeq() > MaxSeq-uint64(n)+1 {
+			return invalid(ReasonSeqOverflow, "first_seq %d + %d readings goes past seq %d", b.GetFirstSeq(), n, uint64(MaxSeq))
 		}
 	}
 	for i, g := range b.GetGaps() {
 		if g.GetFromSeq() < 1 || g.GetFromSeq() > g.GetToSeq() {
 			return invalid(ReasonGapRange, "gap %d: %d-%d", i, g.GetFromSeq(), g.GetToSeq())
+		}
+		if g.GetToSeq() > MaxSeq {
+			return invalid(ReasonSeqOverflow, "gap %d: %d-%d goes past seq %d", i, g.GetFromSeq(), g.GetToSeq(), uint64(MaxSeq))
 		}
 	}
 	for i, r := range b.GetReadings() {

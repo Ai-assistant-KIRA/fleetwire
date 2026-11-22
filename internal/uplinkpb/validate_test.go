@@ -50,6 +50,11 @@ func TestEveryRule(t *testing.T) {
 		{ReasonEmpty, func(b *fleetwirev1.Batch) { b.Readings, b.Gaps = nil, nil }},
 		{ReasonFirstSeq, func(b *fleetwirev1.Batch) { b.FirstSeq = 0 }},
 		{ReasonSeqOverflow, func(b *fleetwirev1.Batch) { b.FirstSeq = math.MaxUint64 }},
+		// Two readings from MaxSeq end one past it.
+		{ReasonSeqOverflow, func(b *fleetwirev1.Batch) { b.FirstSeq = MaxSeq }},
+		{ReasonSeqOverflow, func(b *fleetwirev1.Batch) { b.FirstSeq = math.MaxInt64 }},
+		{ReasonSeqOverflow, func(b *fleetwirev1.Batch) { b.Gaps[0].ToSeq = MaxSeq + 1 }},
+		{ReasonSeqOverflow, func(b *fleetwirev1.Batch) { b.Gaps[0].FromSeq, b.Gaps[0].ToSeq = math.MaxUint64, math.MaxUint64 }},
 		{ReasonTooManyReadings, func(b *fleetwirev1.Batch) {
 			r := b.Readings[0]
 			b.Readings = nil
@@ -86,6 +91,20 @@ func TestEveryRule(t *testing.T) {
 	}
 }
 
+// The highest seq PostgreSQL can hold in the int8range constraints is
+// still valid.
+func TestSeqsUpToMaxSeqAreValid(t *testing.T) {
+	b := validBatch()
+	b.FirstSeq = MaxSeq - 1
+	b.Gaps[0].FromSeq, b.Gaps[0].ToSeq = MaxSeq, MaxSeq
+	if err := Validate(b); err != nil {
+		t.Fatalf("seqs up to MaxSeq rejected: %v", err)
+	}
+	if LastSeq(b) != MaxSeq {
+		t.Fatalf("LastSeq = %d, want %d", LastSeq(b), uint64(MaxSeq))
+	}
+}
+
 func TestGapOnlyBatchIsValid(t *testing.T) {
 	b := validBatch()
 	b.Readings, b.FirstSeq = nil, 0
@@ -107,6 +126,10 @@ func TestDecodeErrors(t *testing.T) {
 func FuzzDecodeAndValidate(f *testing.F) {
 	raw, _ := proto.Marshal(validBatch())
 	f.Add(raw)
+	top := validBatch()
+	top.FirstSeq = MaxSeq - 1
+	raw, _ = proto.Marshal(top)
+	f.Add(raw)
 	f.Add([]byte{})
 	f.Add([]byte{0x08, 0x01, 0x10, 0x00})
 	f.Fuzz(func(t *testing.T, raw []byte) {
@@ -120,12 +143,12 @@ func FuzzDecodeAndValidate(f *testing.F) {
 		}
 		// Whatever passes must be safe for ingest to use as is.
 		if len(b.GetReadings()) > 0 {
-			if b.GetFirstSeq() < 1 || LastSeq(b) < b.GetFirstSeq() {
+			if b.GetFirstSeq() < 1 || LastSeq(b) < b.GetFirstSeq() || LastSeq(b) > MaxSeq {
 				t.Fatalf("bad seq range accepted: first %d, n %d", b.GetFirstSeq(), len(b.GetReadings()))
 			}
 		}
 		for _, g := range b.GetGaps() {
-			if g.GetFromSeq() < 1 || g.GetFromSeq() > g.GetToSeq() {
+			if g.GetFromSeq() < 1 || g.GetFromSeq() > g.GetToSeq() || g.GetToSeq() > MaxSeq {
 				t.Fatalf("bad gap accepted: %v", g)
 			}
 		}
