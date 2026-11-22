@@ -7,6 +7,8 @@
 //
 // The token decides which API is used: an operator token (fwo_) reaches the
 // fleet-wide operator endpoints, a tenant token (fwt_) the tenant's own.
+// The URL must be https, or http to a loopback address: the token is sent
+// with every request.
 package main
 
 import (
@@ -20,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -65,9 +68,11 @@ Tenant token (fwt_...):
   audit list [-limit N]
 
 Each command takes only the flags listed for it. Flags may follow its
-arguments, and -- ends them.
+arguments, and -- ends them. The URL must be https, or http to a loopback
+address.
 
-Environment: FWCTL_URL, FWCTL_TOKEN, FWCTL_CA_FILE, FWCTL_OUTPUT.
+Environment: FWCTL_URL, FWCTL_TOKEN, FWCTL_CA_FILE, FWCTL_OUTPUT. Prefer
+FWCTL_TOKEN to -token: other users of the machine can see command lines.
 `
 
 func main() {
@@ -116,6 +121,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if *base == "" || *token == "" {
 		return errors.New("-url and -token (or FWCTL_URL and FWCTL_TOKEN) are required")
 	}
+	if err := checkURL(*base); err != nil {
+		return err
+	}
 	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if *caFile != "" {
 		pem, err := os.ReadFile(*caFile)
@@ -147,6 +155,33 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return err
 	}
 	return h.run(ctx, pos)
+}
+
+// checkURL refuses a base URL that would send the token in clear text
+// over a network. Plain http is accepted to a loopback address, where a
+// local proxy or tunnel may terminate TLS.
+func checkURL(base string) error {
+	u, err := url.Parse(base)
+	if err != nil {
+		return fmt.Errorf("-url: %w", err)
+	}
+	switch {
+	case u.Scheme == "https" && u.Host != "":
+		return nil
+	case u.Scheme == "http" && loopback(u.Hostname()):
+		return nil
+	case u.Scheme == "http":
+		return fmt.Errorf("-url %s: plain http would send the token in clear text; use https (http is accepted only to a loopback address)", base)
+	}
+	return fmt.Errorf("-url %q: want https://host[:port]", base)
+}
+
+func loopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // parseInterleaved lets flags follow positional arguments

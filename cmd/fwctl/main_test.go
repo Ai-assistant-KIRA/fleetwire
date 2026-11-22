@@ -200,6 +200,26 @@ func TestParseInterleavedStopsAtDoubleDash(t *testing.T) {
 	}
 }
 
+func TestPlainHTTPOnlyToLoopback(t *testing.T) {
+	for base, ok := range map[string]bool{
+		"https://api.example.com": true,
+		"http://127.0.0.1:8080":   true,
+		"http://[::1]:8080":       true,
+		"http://localhost:8080":   true,
+		"http://api.example.com":  false,
+		"http://10.0.0.5:8443":    false,
+		"ftp://api.example.com":   false,
+		"api.example.com:8443":    false,
+	} {
+		if err := checkURL(base); (err == nil) != ok {
+			t.Errorf("checkURL(%q) = %v, want ok %v", base, err, ok)
+		}
+	}
+	if _, err := fwctlEnv(t, "http://api.example.com", "device", "list"); err == nil || !strings.Contains(err.Error(), "clear text") {
+		t.Fatalf("plain http to a remote host: %v", err)
+	}
+}
+
 // -limit is the page size the API is asked for, up to the endpoint's
 // largest; an empty list prints [] in JSON.
 func TestLimitSetsThePageSize(t *testing.T) {
