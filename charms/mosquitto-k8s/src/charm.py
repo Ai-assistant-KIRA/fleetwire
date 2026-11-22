@@ -276,9 +276,15 @@ class MosquittoCharm(ops.CharmBase):
             },
         }
         running = SERVICE in c.get_services() and c.get_services()[SERVICE].is_running()
+        before = c.get_plan().services.get(SERVICE)
         c.add_layer(SERVICE, layer, combine=True)
+        restarts = c.get_plan().services.get(SERVICE) != before
         c.replan()
-        if crl_changed and running:
+        # A changed service definition makes replan restart Mosquitto, and the
+        # new process reads the new CRL itself. A SIGHUP right after the
+        # restart could reach it before it handles the signal, and SIGHUP's
+        # default action ends the process.
+        if crl_changed and running and not restarts:
             c.send_signal("SIGHUP", SERVICE)
             logger.info("loaded a new CRL into Mosquitto")
 

@@ -173,6 +173,20 @@ def test_a_new_crl_is_loaded_with_sighup(ctx, root, api, signals):
     assert (root / "crl/crl.pem").read_bytes() == CRL_V2
 
 
+def test_a_new_crl_with_a_new_configuration_restarts_without_sighup(ctx, root, api, signals):
+    secret = testing.Secret(tracked_content=PKI)
+    first = ctx.run(ctx.on.config_changed(), setup(root, secret=secret))
+    before = first.get_container(CONTAINER).plan.services[SERVICE].environment
+    api.crl = CRL_V2
+    st = dataclasses.replace(first, config={**first.config, "max-queued-messages": 5000})
+    out = ctx.run(ctx.on.config_changed(), st)
+    # replan restarts Mosquitto with the new file and the new CRL; a SIGHUP
+    # on top could reach the new process before it handles the signal.
+    assert out.get_container(CONTAINER).plan.services[SERVICE].environment != before
+    assert (root / "crl/crl.pem").read_bytes() == CRL_V2
+    assert signals == []
+
+
 def test_an_unreachable_api_keeps_the_current_crl(ctx, root, api, signals):
     first = ctx.run(ctx.on.config_changed(), setup(root))
     api.crl = None
