@@ -117,10 +117,16 @@ type Uplink struct {
 	wake   chan struct{}
 
 	// Owned by the loop goroutine.
-	seenGen        uint64
-	nextToSend     uint64
-	inflight       []span
-	pendingSince   time.Time
+	seenGen      uint64
+	nextToSend   uint64
+	inflight     []span
+	pendingSince time.Time
+	// batchDue is when the partial batch that send is holding back may go
+	// out, or zero when send is not waiting for one. Only this deadline
+	// may wake the loop early: pendingSince stays set while the device is
+	// disconnected, backing off or has a full window, and waking on it then
+	// made the loop run every millisecond.
+	batchDue       time.Time
 	gapsSent       []wal.Gap
 	gapsSentAt     time.Time
 	retryAt        time.Time
@@ -236,9 +242,7 @@ func (u *Uplink) HandleAck(payload []byte) error {
 
 // Run sends until ctx ends, then persists the latest ack.
 func (u *Uplink) Run(ctx context.Context) error {
-	u.nextToSend = u.log.Acked() + 1
-	u.highestSent = u.log.Next() - 1
-	u.seenGen = u.conn.Load() >> 1
+	u.begin()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	timer := time.NewTimer(time.Hour)
@@ -262,11 +266,24 @@ func (u *Uplink) Run(ctx context.Context) error {
 	}
 }
 
+// begin starts the loop's state from the log.
+func (u *Uplink) begin() {
+	u.nextToSend = u.log.Acked() + 1
+	u.highestSent = u.log.Next() - 1
+	u.seenGen = u.conn.Load() >> 1
+}
+
+// nextWake is how long the loop may sleep. Acks, connection changes and
+// new durable records wake it early through channels; the ticker catches
+// ack timeouts.
 func (u *Uplink) nextWake() time.Duration {
 	now := time.Now()
 	wake := now.Add(time.Second)
-	if !u.pendingSince.IsZero() {
-		wake = earliest(wake, u.pendingSince.Add(u.cfg.BatchWait))
+	if !u.batchDue.IsZero() {
+		wake = earliest(wake, u.batchDue)
+	}
+	if u.retryAt.After(now) {
+		wake = earliest(wake, u.retryAt)
 	}
 	if u.checkpointDue {
 		wake = earliest(wake, u.lastCheckpoint.Add(u.cfg.CheckpointEvery))
@@ -356,12 +373,15 @@ func (u *Uplink) applyAck() {
 }
 
 func (u *Uplink) checkpoint() {
+	// A failed save is retried after CheckpointEvery like any other, not on
+	// the next wake: a full disk would otherwise be retried every
+	// millisecond.
+	u.lastCheckpoint = time.Now()
 	if err := u.log.Checkpoint(); err != nil {
 		u.lg.Error("saving agent state failed", "err", err)
 		return
 	}
 	u.checkpointDue = false
-	u.lastCheckpoint = time.Now()
 }
 
 // gapsCovered reports whether every pending gap was already sent.
@@ -375,6 +395,7 @@ func gapsCovered(pending, sent []wal.Gap) bool {
 }
 
 func (u *Uplink) send(ctx context.Context) {
+	u.batchDue = time.Time{}
 	for ctx.Err() == nil {
 		conn := u.conn.Load()
 		if conn&1 == 0 || conn>>1 != u.seenGen {
@@ -400,6 +421,14 @@ func (u *Uplink) send(ctx context.Context) {
 			room = uint64(u.cfg.MaxInflight) - inFlight
 		}
 		pending := u.log.PendingGaps()
+		// A batch carries at most MaxGaps gaps: the oldest ones, which the
+		// server needs first to move its ack. The rest become the oldest
+		// once those are acked. Comparing the whole list with what one
+		// batch could carry made the gaps look unsent forever, and the
+		// same batch went out again and again without a pause.
+		if len(pending) > uplinkpb.MaxGaps {
+			pending = pending[:uplinkpb.MaxGaps]
+		}
 		// Gaps are resent when new ones appear, and again after an ack
 		// timeout if the server has not covered them yet.
 		sendGaps := len(pending) > 0 && (!gapsCovered(pending, u.gapsSent) || now.Sub(u.gapsSentAt) > u.timeout())
@@ -413,6 +442,9 @@ func (u *Uplink) send(ctx context.Context) {
 		full := avail >= batch && room >= batch
 		waited := n > 0 && now.Sub(u.pendingSince) >= u.cfg.BatchWait
 		if !sendGaps && !full && !waited {
+			if n > 0 {
+				u.batchDue = u.pendingSince.Add(u.cfg.BatchWait)
+			}
 			return
 		}
 		var recs []wal.Record
@@ -430,8 +462,6 @@ func (u *Uplink) send(ctx context.Context) {
 		gaps := pending
 		if !sendGaps {
 			gaps = nil
-		} else if len(gaps) > uplinkpb.MaxGaps {
-			gaps = gaps[:uplinkpb.MaxGaps]
 		}
 		payload := EncodeBatch(recs, gaps, now.UnixNano(), u.cfg.AgentVersion)
 		pctx, cancel := context.WithTimeout(ctx, u.cfg.PublishTimeout)

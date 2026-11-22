@@ -25,6 +25,10 @@ type memPub struct {
 	mu      sync.Mutex
 	batches []*fleetwirev1.Batch
 	fail    int // fail this many publishes with a timeout-like error
+	// limit, if set, refuses publishes once this many batches are held, so
+	// a loop that publishes without pausing stops instead of hanging the
+	// test.
+	limit int
 }
 
 func (p *memPub) Publish(_ context.Context, payload []byte) error {
@@ -33,6 +37,9 @@ func (p *memPub) Publish(_ context.Context, payload []byte) error {
 	if p.fail > 0 {
 		p.fail--
 		return errors.New("publish timed out")
+	}
+	if p.limit > 0 && len(p.batches) >= p.limit {
+		return ErrNotConnected
 	}
 	b, err := uplinkpb.DecodeAndValidate(payload)
 	if err != nil {
@@ -496,6 +503,154 @@ func TestGapsAreReportedUntilAcked(t *testing.T) {
 		if len(r.log.PendingGaps()) != 0 || len(r.log.GapHistory()) != 1 {
 			t.Fatalf("pending %v history %v", r.log.PendingGaps(), r.log.GapHistory())
 		}
+	})
+}
+
+// More pending gaps than one batch can carry: the batch takes the oldest
+// MaxGaps, and they are not sent again until the ack timeout, or until the
+// server covers them and the next ones become the oldest. Comparing every
+// pending gap with what one batch could carry made the uplink publish the
+// same batch again and again without a pause.
+func TestTruncatedGapsAreNotResentAtOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		dir := t.TempDir()
+		n := uplinkpb.MaxGaps + 500
+		st := wal.State{MaxSeqEver: uint64(n)}
+		for i := 1; i <= n; i++ {
+			// Alternating reasons keep neighbors from merging into one gap.
+			reason := wal.GapDiskBudget
+			if i%2 == 0 {
+				reason = wal.GapCorruption
+			}
+			st.PendingGaps = append(st.PendingGaps, wal.Gap{From: uint64(i), To: uint64(i), Reason: reason})
+		}
+		if err := wal.SaveState(dir, st); err != nil {
+			t.Fatal(err)
+		}
+		r := start(t, base, wal.Options{Dir: dir})
+		defer r.stop()
+		r.pub.mu.Lock()
+		r.pub.limit = 10
+		r.pub.mu.Unlock()
+		if got := len(r.log.PendingGaps()); got != n {
+			t.Fatalf("%d pending gaps after open, want %d", got, n)
+		}
+		r.up.Connected()
+		synctest.Wait()
+		sent := r.pub.take()
+		if len(sent) != 1 || len(sent[0].GetGaps()) != uplinkpb.MaxGaps || sent[0].GetGaps()[0].GetFromSeq() != 1 {
+			t.Fatalf("%d batches on connect, want one with the oldest %d gaps", len(sent), uplinkpb.MaxGaps)
+		}
+		time.Sleep(10 * time.Second)
+		synctest.Wait()
+		if got := r.pub.take(); len(got) != 0 {
+			t.Fatalf("%d more batches repeated the gaps before the ack timeout", len(got))
+		}
+		// Still not covered after the ack timeout (30 s): sent again, once.
+		time.Sleep(22 * time.Second)
+		synctest.Wait()
+		if got := r.pub.take(); len(got) != 1 || len(got[0].GetGaps()) != uplinkpb.MaxGaps {
+			t.Fatalf("%d batches after the ack timeout, want one with %d gaps", len(got), uplinkpb.MaxGaps)
+		}
+		// The server covers the first MaxGaps: the rest go out at once.
+		ack(t, r.up, uint64(uplinkpb.MaxGaps))
+		synctest.Wait()
+		got := r.pub.take()
+		if len(got) != 1 || len(got[0].GetGaps()) != n-uplinkpb.MaxGaps || got[0].GetGaps()[0].GetFromSeq() != uplinkpb.MaxGaps+1 {
+			t.Fatalf("%d batches after the ack, want one with the remaining %d gaps", len(got), n-uplinkpb.MaxGaps)
+		}
+	})
+}
+
+// A device that cannot send sleeps until something changes: an ack, a new
+// connection, new records, or the ticker that checks ack timeouts. Waking
+// at the end of the batch wait of records it could not send made a
+// disconnected or backlogged device run its loop every millisecond, which
+// with 10,000 load-generator devices kept the machine busy through every
+// outage.
+func TestLoopSleepsWhileItCannotSend(t *testing.T) {
+	cfg := base
+	cfg.BatchWait = 100 * time.Millisecond
+	// newUplink returns an uplink that the test drives by hand: Run calls
+	// step and nextWake in a loop.
+	newUplink := func(t *testing.T, pub *memPub) (*Uplink, *wal.Log) {
+		t.Helper()
+		l, _, err := wal.Open(wal.Options{Dir: t.TempDir(), Sync: wal.SyncAlways})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = l.Close() })
+		u := New(cfg, l, pub, NewMetrics(prometheus.NewRegistry()), discard())
+		u.begin()
+		u.Connected()
+		return u, l
+	}
+	// later lets the batch wait pass, runs one step, and returns the sleep
+	// that follows it.
+	later := func(t *testing.T, u *Uplink) time.Duration {
+		time.Sleep(2 * cfg.BatchWait)
+		u.step(t.Context())
+		return u.nextWake()
+	}
+	t.Run("partial batch", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			u, l := newUplink(t, &memPub{})
+			fill(t, l, 3)
+			u.step(t.Context())
+			if d := u.nextWake(); d != cfg.BatchWait {
+				t.Fatalf("a partial batch should wake the loop when its batch wait ends (%v); next wake in %v", cfg.BatchWait, d)
+			}
+		})
+	})
+	t.Run("disconnected", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			u, l := newUplink(t, &memPub{})
+			fill(t, l, 3)
+			u.step(t.Context())
+			u.Disconnected()
+			if d := later(t, u); d != time.Second {
+				t.Fatalf("disconnected with readings waiting: next wake in %v, want the 1 s tick", d)
+			}
+		})
+	})
+	t.Run("window full", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			pub := &memPub{}
+			u, l := newUplink(t, pub)
+			fill(t, l, cfg.MaxInflight+5)
+			u.step(t.Context())
+			if got := seqRanges(pub.take()); len(got) != 3 {
+				t.Fatalf("sent %v, want the window of three batches", got)
+			}
+			if d := later(t, u); d != time.Second {
+				t.Fatalf("window full: next wake in %v, want the 1 s tick", d)
+			}
+		})
+	})
+	t.Run("publish failed", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			u, l := newUplink(t, &memPub{fail: 1})
+			fill(t, l, cfg.BatchSize)
+			u.step(t.Context())
+			if d, want := later(t, u), time.Second-2*cfg.BatchWait; d != want {
+				t.Fatalf("after a failed publish: next wake in %v, want the retry %v later", d, want)
+			}
+		})
+	})
+	t.Run("state save failing", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			u, l := newUplink(t, &memPub{})
+			fill(t, l, cfg.BatchSize)
+			u.step(t.Context())
+			// Every save fails once the log is closed.
+			if err := l.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ack(t, u, uint64(cfg.BatchSize))
+			if d := later(t, u); d != u.cfg.CheckpointEvery {
+				t.Fatalf("after a failed state save: next wake in %v, want the retry %v later", d, u.cfg.CheckpointEvery)
+			}
+		})
 	})
 }
 
