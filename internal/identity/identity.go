@@ -250,6 +250,9 @@ func (id *Identity) Enroll(ctx context.Context, apiURL, token, name string, caBu
 		tlsCfg.RootCAs = pool
 	}
 	c := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}}
+	// The client lives for one attempt; its kept-alive connection would
+	// otherwise stay open, with two goroutines, after every retry.
+	defer c.CloseIdleConnections()
 	var resp struct {
 		DeviceID       uuid.UUID `json:"device_id"`
 		CertificatePEM string    `json:"certificate_pem"`
@@ -307,6 +310,7 @@ func (id *Identity) Renew(ctx context.Context) error {
 	}
 	// An empty ServerName makes net/http verify against the URL's host.
 	c := &http.Client{Transport: &http.Transport{TLSClientConfig: id.ClientTLS("")}}
+	defer c.CloseIdleConnections() // as in Enroll
 	var resp struct {
 		CertificatePEM string `json:"certificate_pem"`
 		CABundlePEM    string `json:"ca_bundle_pem"`

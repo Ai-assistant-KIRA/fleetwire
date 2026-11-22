@@ -1,9 +1,14 @@
 package identity_test
 
 import (
+	"encoding/pem"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +17,51 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/identity"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/pki/devpki"
 )
+
+// Each enrollment attempt builds its own HTTP client. When the attempt ends
+// its kept-alive connection must be closed; otherwise a device retrying
+// every 30 s piled up open connections, each with two goroutines, until
+// the server dropped them.
+func TestEnrollAttemptsLeaveNoConnectionOpen(t *testing.T) {
+	var mu sync.Mutex
+	open := map[net.Conn]bool{}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"status":503,"code":"unavailable"}`, http.StatusServiceUnavailable)
+	}))
+	srv.Config.ConnState = func(c net.Conn, s http.ConnState) {
+		mu.Lock()
+		defer mu.Unlock()
+		if s == http.StateNew {
+			open[c] = true
+		}
+		if s == http.StateClosed || s == http.StateHijacked {
+			delete(open, c)
+		}
+	}
+	srv.StartTLS()
+	defer srv.Close()
+	ca := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	id, err := identity.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := id.Enroll(t.Context(), srv.URL, "fwe_test", "dev", ca); err == nil || errors.Is(err, identity.ErrPermanent) {
+			t.Fatalf("Enroll against a 503 = %v, want a retryable error", err)
+		}
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		mu.Lock()
+		n := len(open)
+		mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d connections still open after three enrollment attempts", n)
+		}
+	}
+}
 
 func TestEnrollRenewAndReload(t *testing.T) {
 	h := apitest.New(t, func(c *api.Config) {})
