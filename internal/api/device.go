@@ -58,7 +58,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.Name != "" && !validName(req.Name) {
-		writeProblem(w, r, errBadRequest("name must be 1 to 200 characters"))
+		writeProblem(w, r, errBadRequest(nameRule))
 		return
 	}
 	var hash []byte

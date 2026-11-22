@@ -89,6 +89,20 @@ const maxBody = 1 << 20
 
 // decodeJSON reads exactly one JSON object with no unknown fields.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) *apiError {
+	return decodeBody(w, r, v, false)
+}
+
+// decodeOptionalJSON is decodeJSON for a body the client may leave out.
+// An empty body counts as none even without Content-Length: 0, since
+// chunked HTTP/1.1 and HTTP/2 requests arrive with ContentLength -1.
+func decodeOptionalJSON(w http.ResponseWriter, r *http.Request, v any) *apiError {
+	return decodeBody(w, r, v, true)
+}
+
+func decodeBody(w http.ResponseWriter, r *http.Request, v any, optional bool) *apiError {
+	if optional && r.ContentLength == 0 {
+		return nil
+	}
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		mt, _, err := mime.ParseMediaType(ct)
 		if err != nil || mt != "application/json" {
@@ -98,6 +112,10 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) *apiError {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		// Decode returns io.EOF only when the body holds no JSON at all.
+		if optional && errors.Is(err, io.EOF) {
+			return nil
+		}
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			return &apiError{status: http.StatusRequestEntityTooLarge, code: "too_large", detail: "request body exceeds 1 MiB"}

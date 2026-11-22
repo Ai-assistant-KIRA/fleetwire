@@ -20,7 +20,7 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/api/apitest"
 )
 
-// contract validates every response the harness sees against
+// contract validates every exchange the harness sees against
 // api/openapi.yaml and records which operations were exercised.
 type contract struct {
 	router routers.Router
@@ -71,6 +71,23 @@ func (c *contract) validate(t *testing.T, req *http.Request, resp *http.Response
 	c.mu.Lock()
 	c.seen[route.Operation.OperationID] = true
 	c.mu.Unlock()
+	// A request the server accepted must be one the spec accepts too.
+	// Refused requests are not checked: the tests send many of them on
+	// purpose, and some (a bad cursor, say) are valid by the schema.
+	if resp.StatusCode < 400 {
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.Body = body
+		}
+		rin := &openapi3filter.RequestValidationInput{Request: r, PathParams: params, Route: route,
+			Options: &openapi3filter.Options{AuthenticationFunc: openapi3filter.NoopAuthenticationFunc, MultiError: true}}
+		if err := openapi3filter.ValidateRequest(req.Context(), rin); err != nil {
+			t.Errorf("%s %s -> %d: the request does not match openapi.yaml: %v", req.Method, req.URL.Path, resp.StatusCode, err)
+		}
+	}
 	in := &openapi3filter.ResponseValidationInput{
 		RequestValidationInput: &openapi3filter.RequestValidationInput{Request: r, PathParams: params, Route: route},
 		Status:                 resp.StatusCode,
@@ -99,7 +116,8 @@ func (c *contract) unexercised() []string {
 }
 
 // TestResponsesMatchOpenAPI calls every documented operation, success and
-// error paths, and validates each response against the spec (R8.5).
+// error paths, and validates each response, and each accepted request,
+// against the spec (R8.5).
 func TestResponsesMatchOpenAPI(t *testing.T) {
 	h := apitest.New(t)
 	c := newContract(t, h)
@@ -200,6 +218,8 @@ func TestResponsesMatchOpenAPI(t *testing.T) {
 		{"PATCH", "/v1/tenant", tok, map[string]any{"retention_days": 99999}, 400},
 		{"POST", "/v1/tokens", tok, map[string]any{"name": "x", "scopes": []string{"root"}}, 400},
 		{"GET", "/v1/devices/" + devA.ID.String() + "/readings?cursor=bogus", tok, nil, 400},
+		{"POST", "/v1/enrollment-tokens", tok, map[string]any{"count": 0}, 400},
+		{"POST", "/v1/tokens", tok, map[string]any{"name": "a\x00b", "scopes": []string{"audit:read"}}, 400},
 	} {
 		resp, body := h.Do(e.method, e.path, e.token, e.body)
 		if resp.StatusCode != e.status {

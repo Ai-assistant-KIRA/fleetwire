@@ -21,10 +21,8 @@ func (s *Server) createExport(w http.ResponseWriter, r *http.Request, p *princip
 	var req struct {
 		DeviceID *uuid.UUID `json:"device_id"`
 	}
-	if r.ContentLength != 0 {
-		if e := decodeJSON(w, r, &req); e != nil {
-			return e
-		}
+	if e := decodeOptionalJSON(w, r, &req); e != nil {
+		return e
 	}
 	id, err := uuid.NewV7()
 	if err != nil {

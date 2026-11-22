@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -19,9 +20,18 @@ func audit(p *principal, action, targetType, targetID string, details map[string
 		TargetType: targetType, TargetID: targetID, Result: store.ResultSuccess, Details: details}
 }
 
+// nameRule is the error text for names validName refuses.
+const nameRule = "name must be 1 to 200 characters, without control characters"
+
+// validName accepts 1 to 200 characters after trimming spaces. Control
+// characters are refused: PostgreSQL text cannot hold NUL, and the others
+// break logs and terminals that show the name.
 func validName(s string) bool {
+	if !utf8.ValidString(s) || strings.ContainsFunc(s, unicode.IsControl) {
+		return false
+	}
 	n := utf8.RuneCountInString(strings.TrimSpace(s))
-	return n >= 1 && n <= 200 && utf8.ValidString(s)
+	return n >= 1 && n <= 200
 }
 
 func (s *Server) createTenant(w http.ResponseWriter, r *http.Request, p *principal) *apiError {
@@ -38,7 +48,7 @@ func (s *Server) createTenant(w http.ResponseWriter, r *http.Request, p *princip
 	}
 	var problems []string
 	if !validName(req.Name) {
-		problems = append(problems, "name must be 1 to 200 characters")
+		problems = append(problems, nameRule)
 	}
 	if days < 1 || days > 3650 {
 		problems = append(problems, "retention_days must be between 1 and 3650")
@@ -187,7 +197,7 @@ type createTokenReq struct {
 func (s *Server) issueToken(r *http.Request, tenant uuid.UUID, p *principal, req createTokenReq) (tokenJSON, *apiError) {
 	var problems []string
 	if !validName(req.Name) {
-		problems = append(problems, "name must be 1 to 200 characters")
+		problems = append(problems, nameRule)
 	}
 	if err := tokens.ValidateScopes(req.Scopes); err != nil {
 		problems = append(problems, err.Error())
@@ -249,28 +259,28 @@ func (s *Server) adminCreateToken(w http.ResponseWriter, r *http.Request, p *pri
 	return nil
 }
 
+// enrollReq has pointers so that a field left out takes its default while
+// an explicit 0 is refused, as the schema says.
 type enrollReq struct {
-	Count      int `json:"count"`
-	TTLSeconds int `json:"ttl_seconds"`
+	Count      *int `json:"count"`
+	TTLSeconds *int `json:"ttl_seconds"`
 }
 
 func (s *Server) issueEnrollmentTokens(w http.ResponseWriter, r *http.Request, tenant uuid.UUID, p *principal) *apiError {
 	var req enrollReq
-	if r.ContentLength != 0 {
-		if e := decodeJSON(w, r, &req); e != nil {
-			return e
-		}
+	if e := decodeOptionalJSON(w, r, &req); e != nil {
+		return e
 	}
-	if req.Count == 0 {
-		req.Count = 1
+	count, ttl, ttlOK := 1, s.cfg.EnrollTokenTTL, true
+	if req.Count != nil {
+		count = *req.Count
 	}
 	// Checked in seconds: a large value would overflow time.Duration.
-	ttlOK := req.TTLSeconds == 0 || (req.TTLSeconds >= 60 && req.TTLSeconds <= 86400)
-	ttl := s.cfg.EnrollTokenTTL
-	if ttlOK && req.TTLSeconds != 0 {
-		ttl = time.Duration(req.TTLSeconds) * time.Second
+	if req.TTLSeconds != nil {
+		ttlOK = *req.TTLSeconds >= 60 && *req.TTLSeconds <= 86400
+		ttl = time.Duration(*req.TTLSeconds) * time.Second
 	}
-	if !ttlOK || req.Count < 1 || req.Count > 1000 || ttl < time.Minute || ttl > 24*time.Hour {
+	if !ttlOK || count < 1 || count > 1000 || ttl < time.Minute || ttl > 24*time.Hour {
 		return errBadRequest("count must be 1 to 1000 and ttl_seconds 60 to 86400")
 	}
 	expires := s.now().Add(ttl).UTC().Truncate(time.Second)
@@ -291,7 +301,7 @@ func (s *Server) issueEnrollmentTokens(w http.ResponseWriter, r *http.Request, t
 			apiErr = errConflict("tenant is not active")
 			return nil
 		}
-		for i := 0; i < req.Count; i++ {
+		for i := 0; i < count; i++ {
 			secret, hash, err := tokens.NewEnrollment()
 			if err != nil {
 				return err
@@ -302,7 +312,7 @@ func (s *Server) issueEnrollmentTokens(w http.ResponseWriter, r *http.Request, t
 			out.Tokens = append(out.Tokens, enrollmentTokenJSON{Token: secret.Reveal(), ExpiresAt: expires})
 		}
 		return tx.InsertAudit(ctx, audit(p, "enrollment_token.create", "tenant", tenant.String(),
-			map[string]any{"count": req.Count, "expires_at": expires}))
+			map[string]any{"count": count, "expires_at": expires}))
 	})
 	if err != nil {
 		return s.internal(r, err)
