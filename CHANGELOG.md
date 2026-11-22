@@ -6,15 +6,13 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-11-21
-
 ### Fixed
 
 - Stamp the packaged agent binary with the snap's version, so `fleetwire-agent
   status` and build-info metrics identify the installed release.
-- Exclude the generated Ubuntu Core disk from Docker build contexts. Running
-  `uc-vm.sh download` before `make up` no longer sends the sparse 8 GiB image
-  into each service build.
+- Exclude the generated Ubuntu Core disk from Docker and Snapcraft build
+  contexts. Running `uc-vm.sh download` before `make up` or `make snap` no
+  longer copies the sparse 8 GiB image into service or snap builds.
 
 ## [0.1.0] - 2026-11-21
 
@@ -57,6 +55,5 @@ The first release.
 - CI with pinned actions, release builds with GoReleaser, SPDX SBOMs and
   cosign keyless signatures, and Sphinx documentation in the Diátaxis layout.
 
-[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.1...HEAD
-[0.1.1]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.0...v0.1.1
+[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/Ai-assistant-KIRA/fleetwire/releases/tag/v0.1.0
