@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -188,6 +189,91 @@ func TestKeyIsNotHandedToAnotherTenant(t *testing.T) {
 	keyA := e.sealingKey(m, a)
 	if _, err := m.Key(t.Context(), b, keyA); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("tenant B asking for tenant A's key: %v, want not found", err)
+	}
+}
+
+// TestNoKeyringCallUnderTheTenantLock: neither loading nor rotating the
+// sealing key calls the keyring while the tenant row is locked.
+func TestNoKeyringCallUnderTheTenantLock(t *testing.T) {
+	e := newEnv(t)
+	tenant := e.tenant(e.manager())
+	m := e.manager() // an empty cache: the first key is unwrapped
+	first := e.sealingKey(m, tenant)
+	m.NoteSeals(tenant, first, MaxSeals)
+	if e.sealingKey(m, tenant) == first {
+		t.Fatal("the key did not rotate")
+	}
+	if e.kr.unwraps.Load() == 0 || e.kr.wraps.Load() < 2 {
+		t.Fatalf("keyring calls: %d wraps, %d unwraps; the test did not exercise both", e.kr.wraps.Load(), e.kr.unwraps.Load())
+	}
+	if n := e.kr.underLock.Load(); n != 0 {
+		t.Fatalf("%d keyring calls ran while the tenant row was locked", n)
+	}
+}
+
+// TestConcurrentReloadsShareOneUnwrap: callers that all miss the cache at
+// once wait for one reload instead of each unwrapping the key.
+func TestConcurrentReloadsShareOneUnwrap(t *testing.T) {
+	e := newEnv(t)
+	tenant := e.tenant(e.manager())
+	m := e.manager()
+	e.kr.gate = make(chan struct{})
+	const n = 16
+	keys := make([]uuid.UUID, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			id, _, err := m.SealingKey(t.Context(), tenant)
+			if err != nil {
+				t.Error(err)
+			}
+			keys[i] = id
+		})
+	}
+	// Without a shared reload, every caller would reach Unwrap and wait here.
+	time.Sleep(300 * time.Millisecond)
+	close(e.kr.gate)
+	wg.Wait()
+	if got := e.kr.unwraps.Load(); got != 1 {
+		t.Fatalf("%d unwraps for %d concurrent callers, want 1", got, n)
+	}
+	for _, k := range keys {
+		if k != keys[0] {
+			t.Fatalf("callers got different keys: %v", keys)
+		}
+	}
+}
+
+// TestCallerGivingUpDoesNotFailTheOthers: the caller whose miss started a
+// reload can give up without failing the callers waiting for the reload.
+func TestCallerGivingUpDoesNotFailTheOthers(t *testing.T) {
+	e := newEnv(t)
+	tenant := e.tenant(e.manager())
+	m := e.manager()
+	e.kr.gate = make(chan struct{})
+	ctx, cancel := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+	go func() {
+		_, _, err := m.SealingKey(ctx, tenant)
+		first <- err
+	}()
+	for e.kr.unwraps.Load() == 0 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	second := make(chan error, 1)
+	go func() {
+		_, _, err := m.SealingKey(t.Context(), tenant)
+		second <- err
+	}()
+	// Let the second caller join the reload before the first gives up.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	if err := <-first; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the caller that gave up: %v, want context.Canceled", err)
+	}
+	close(e.kr.gate)
+	if err := <-second; err != nil {
+		t.Fatalf("the caller still waiting: %v", err)
 	}
 }
 
