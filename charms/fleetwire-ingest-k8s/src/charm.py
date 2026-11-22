@@ -29,6 +29,12 @@ CONTAINER = "ingest"
 SERVICE = "fleetwire-ingest"
 BINARY = "/usr/local/bin/service"
 PKI = "/etc/fleetwire/pki"
+# The database URL and the Kafka password go into files here and the layer
+# names the files: a value in the layer's environment is shown to anyone who
+# can run `pebble plan`.
+SECRETS = "/etc/fleetwire/secrets"
+DATABASE_URL_FILE = f"{SECRETS}/database-url"
+KAFKA_PASSWORD_FILE = f"{SECRETS}/kafka-password"
 # The distroless images' nonroot user. Pebble runs the service and the
 # one-off commands as this user; the charm writes files for it.
 WORKLOAD_UID = 65532
@@ -47,7 +53,7 @@ TOPICS_ENV = (
     "FLEETWIRE_KAFKA_BROKERS",
     "FLEETWIRE_KAFKA_SASL_MECHANISM",
     "FLEETWIRE_KAFKA_USERNAME",
-    "FLEETWIRE_KAFKA_PASSWORD",
+    "FLEETWIRE_KAFKA_PASSWORD_FILE",
     "FLEETWIRE_KAFKA_TLS",
     "FLEETWIRE_KAFKA_TLS_CA_FILE",
     "FLEETWIRE_KAFKA_REPLICATION",
@@ -76,9 +82,10 @@ def readyz(port: int) -> bool:
 def files_digest(files: dict[str, str]) -> str:
     """SHA-256 over the paths and contents of the files written for the service.
 
-    Ingest reads its certificates and CA files once, at start. The digest goes
-    into the layer's environment, so a rotated certificate changes the layer
-    and replan restarts the service with the new files.
+    Ingest reads its certificates, CA files and credentials once, at start.
+    The digest goes into the layer's environment, so a rotated certificate or
+    password changes the layer and replan restarts the service with the new
+    files.
     """
     h = hashlib.sha256()
     for path in sorted(files):
@@ -259,7 +266,7 @@ class FleetwireIngestCharm(ops.CharmBase):
         if kafka is None or db is None or mqtt is None or not self._container.can_connect():
             return
         digest = self._write_files(pki, kafka, db)
-        env = self._environment(kafka, db, keyring, mqtt)
+        env = self._environment(kafka, keyring, mqtt)
         if self.unit.is_leader():
             if not self._ensure_topics(kafka, env):
                 return
@@ -286,18 +293,20 @@ class FleetwireIngestCharm(ops.CharmBase):
             files[f"{PKI}/kafka-ca.pem"] = kafka.tls_ca
         if db.tls_ca:
             files[f"{PKI}/postgresql-ca.pem"] = db.tls_ca
+        files[DATABASE_URL_FILE] = db.url
+        files[KAFKA_PASSWORD_FILE] = kafka.password
         own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
         for path, content in files.items():
             self._container.push(path, content, **own)
         return files_digest(files)
 
-    def _environment(self, kafka: Kafka, db: Database, keyring: str, mqtt: str) -> dict[str, str]:
+    def _environment(self, kafka: Kafka, keyring: str, mqtt: str) -> dict[str, str]:
         env = {
-            "FLEETWIRE_DATABASE_URL": db.url,
+            "FLEETWIRE_DATABASE_URL_FILE": DATABASE_URL_FILE,
             "FLEETWIRE_KAFKA_BROKERS": kafka.endpoints,
             "FLEETWIRE_KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
             "FLEETWIRE_KAFKA_USERNAME": kafka.username,
-            "FLEETWIRE_KAFKA_PASSWORD": kafka.password,
+            "FLEETWIRE_KAFKA_PASSWORD_FILE": KAFKA_PASSWORD_FILE,
             "FLEETWIRE_KAFKA_TLS": "true" if kafka.tls_ca else "false",
             # The consumer group must start with the prefix Kafka granted.
             "FLEETWIRE_KAFKA_GROUP": kafka.group_prefix + "ingest",

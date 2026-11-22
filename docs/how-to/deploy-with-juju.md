@@ -232,12 +232,14 @@ headless `<application>-endpoints` service Juju creates.
 - **One Kafka broker** in the bundle, with `kafka-replication: 1`. For three
   brokers, `juju add-unit kafka-k8s -n 2` and set `kafka-replication: 3`
   before ingest first starts.
-- **Database and Kafka passwords are in the Pebble plan.** The services read
-  their settings from the environment, so the charms put the runtime logins'
-  database URLs and the Kafka passwords in the service environment, where
-  anyone who can run commands in the unit's pod (`juju ssh`,
-  `kubectl exec`) can read them. Certificates and keys are files with mode
-  0600.
+- **Passwords are files in the workload container.** The charms write the
+  database URLs and the Kafka password to files with mode 0600, owned by
+  the services' user, and the Pebble plan names only the files
+  (`FLEETWIRE_DATABASE_URL_FILE`, `FLEETWIRE_KAFKA_PASSWORD_FILE`). Anyone
+  who can run commands in the unit's pod (`juju ssh`, `kubectl exec`) can
+  still read them, as they can the certificates and keys. The schema
+  owner's URL is on disk only while `migrate` or the
+  `create-operator-token` action runs.
 
 ## Integration test
 

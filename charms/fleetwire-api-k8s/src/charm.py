@@ -20,9 +20,11 @@ migrations give the policies and grants to.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import urllib.request
+from collections.abc import Iterator
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -36,10 +38,17 @@ SERVICE = "fleetwire-api"
 BINARY = "/usr/local/bin/service"
 DATA = "/var/lib/fleetwire"
 PKI = "/etc/fleetwire/pki"
+# The database URLs go into files here and the layer and commands name the
+# files: a value in the layer's environment is shown to anyone who can run
+# `pebble plan`.
+SECRETS = "/etc/fleetwire/secrets"
+DATABASE_URL_FILE = f"{SECRETS}/database-url"
+OWNER_URL_FILE = f"{SECRETS}/database-owner-url"
 # The distroless images run as nonroot (65532); files are written for it,
 # and Pebble runs the service and the one-off commands as that user.
 WORKLOAD_UID = 65532
 AS_WORKLOAD = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID}
+OWN_FILE = {**AS_WORKLOAD, "make_dirs": True, "permissions": 0o600}
 PUBLIC_PORT, DEVICE_PORT, INTERNAL_PORT, ADMIN_PORT = 8443, 8444, 8445, 9090
 DATABASE_NAME = "fleetwire"
 # The Charmed PostgreSQL group every runtime relation user joins
@@ -77,9 +86,10 @@ def readyz(port: int) -> bool:
 def files_digest(files: dict[str, str | bytes]) -> str:
     """SHA-256 over the paths and contents of the files written for the service.
 
-    The API reads its certificates, CA key and keyring root key once, at
-    start. The digest goes into the layer's environment, so a rotated secret
-    changes the layer and replan restarts the service with the new files.
+    The API reads its certificates, CA key, keyring root key and database
+    URL once, at start. The digest goes into the layer's environment, so a
+    rotated secret or password changes the layer and replan restarts the
+    service with the new files.
     """
     h = hashlib.sha256()
     for path in sorted(files):
@@ -262,13 +272,13 @@ class FleetwireApiCharm(ops.CharmBase):
             return
         if self.app.planned_units() > 1 or not self.config.get("device-broker-url"):
             return
-        digest = self._write_files(pki, runtime.tls_ca or owner.tls_ca)
+        digest = self._write_files(pki, runtime, runtime.tls_ca or owner.tls_ca)
         due = self.unit.is_leader() and not self._migrated(owner)
         if due and not self._migrate(owner):
             return
         if not self._migrated():
             return
-        self._container.add_layer(SERVICE, self._layer(runtime, digest), combine=True)
+        self._container.add_layer(SERVICE, self._layer(digest), combine=True)
         self._container.replan()
         if self.unit.is_leader():
             self._publish()
@@ -288,24 +298,39 @@ class FleetwireApiCharm(ops.CharmBase):
             return
         cmd = [BINARY, "create-operator-token", "-name", str(event.params["name"])]
         try:
-            out, _ = self._container.exec(
-                cmd, environment={"FLEETWIRE_DATABASE_OWNER_URL": owner.url}, timeout=60, **AS_WORKLOAD
-            ).wait_output()
+            with self._owner_url(owner) as env:
+                out, _ = self._container.exec(cmd, environment=env, timeout=60, **AS_WORKLOAD).wait_output()
         except ops.pebble.ExecError as e:
             event.fail(f"create-operator-token failed: {str(e.stderr).strip()}")
             return
         event.set_results({"token": out.strip()})
 
-    def _write_files(self, pki: dict[str, str], pg_ca: str | None) -> str:
+    @contextlib.contextmanager
+    def _owner_url(self, owner: Database) -> Iterator[dict[str, str]]:
+        """Writes the owner's URL for one command and yields its environment.
+
+        The service never uses the owner's login, so the file exists only
+        while migrate or create-operator-token runs.
+        """
+        self._container.push(OWNER_URL_FILE, owner.url, **OWN_FILE)
+        try:
+            yield {"FLEETWIRE_DATABASE_OWNER_URL_FILE": OWNER_URL_FILE}
+        finally:
+            try:
+                self._container.remove_path(OWNER_URL_FILE)
+            except ops.pebble.PathError as e:
+                logger.warning("cannot remove %s: %s", OWNER_URL_FILE, e)
+
+    def _write_files(self, pki: dict[str, str], runtime: Database, pg_ca: str | None) -> str:
         """Writes the service's files and returns their digest."""
         c = self._container
         files: dict[str, str | bytes] = {f"{PKI}/{name}": pki[key] for key, name in PKI_FILES.items()}
         files[f"{PKI}/{ROOT_KEY_FILE}"] = bytes.fromhex(pki["keyring-root-key"].strip())
         if pg_ca:
             files[f"{PKI}/postgresql-ca.pem"] = pg_ca
-        own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
+        files[DATABASE_URL_FILE] = runtime.url
         for path, content in files.items():
-            c.push(path, content, **own)
+            c.push(path, content, **OWN_FILE)
         for sub in ("keyring", "crl", "exports"):
             c.make_dir(
                 f"{DATA}/{sub}", make_parents=True, permissions=0o700, user_id=WORKLOAD_UID, group_id=WORKLOAD_UID
@@ -328,10 +353,11 @@ class FleetwireApiCharm(ops.CharmBase):
 
     def _migrate(self, owner: Database) -> bool:
         self.unit.status = ops.MaintenanceStatus("running database migrations")
-        env = {"FLEETWIRE_DATABASE_OWNER_URL": owner.url, "FLEETWIRE_DATABASE_RUNTIME_ROLE": RUNTIME_ROLE}
         try:
-            proc = self._container.exec([BINARY, "migrate"], environment=env, timeout=600, **AS_WORKLOAD)
-            out, _ = proc.wait_output()
+            with self._owner_url(owner) as env:
+                env["FLEETWIRE_DATABASE_RUNTIME_ROLE"] = RUNTIME_ROLE
+                proc = self._container.exec([BINARY, "migrate"], environment=env, timeout=600, **AS_WORKLOAD)
+                out, _ = proc.wait_output()
         except ops.pebble.ExecError as e:
             # Neither stream carries credentials: the command redacts secrets.
             logger.error("migrations failed (exit %s): %s", e.exit_code, e.stderr)
@@ -345,10 +371,10 @@ class FleetwireApiCharm(ops.CharmBase):
             peer["migrated"] = self._fingerprint(owner)
         return True
 
-    def _layer(self, runtime: Database, files_sha256: str) -> ops.pebble.LayerDict:
+    def _layer(self, files_sha256: str) -> ops.pebble.LayerDict:
         device_api = str(self.config.get("device-api-url") or f"https://{self._service_host}:{DEVICE_PORT}")
         env = {
-            "FLEETWIRE_DATABASE_URL": runtime.url,
+            "FLEETWIRE_DATABASE_URL_FILE": DATABASE_URL_FILE,
             "FLEETWIRE_API_PUBLIC_LISTEN": f":{PUBLIC_PORT}",
             "FLEETWIRE_API_DEVICE_LISTEN": f":{DEVICE_PORT}",
             "FLEETWIRE_API_INTERNAL_LISTEN": f":{INTERNAL_PORT}",

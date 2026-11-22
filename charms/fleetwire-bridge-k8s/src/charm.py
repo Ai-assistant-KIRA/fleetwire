@@ -24,6 +24,9 @@ CONTAINER = "bridge"
 SERVICE = "fleetwire-bridge"
 BINARY = "/usr/local/bin/service"
 PKI = "/etc/fleetwire/pki"
+# Passwords go into files here and the layer names the files: a value in the
+# layer's environment is shown to anyone who can run `pebble plan`.
+SECRETS = "/etc/fleetwire/secrets"
 WORKLOAD_UID = 65532
 ADMIN_PORT = 9090
 # The bridge only writes the uplink topic; ingest creates it.
@@ -48,9 +51,10 @@ def readyz(port: int) -> bool:
 def files_digest(files: dict[str, str]) -> str:
     """SHA-256 over the paths and contents of the files written for the service.
 
-    The bridge reads its certificates once, at start. The digest goes into
-    the layer's environment, so a rotated certificate changes the layer and
-    replan restarts the service with the new files.
+    The bridge reads its certificates and the Kafka password once, at start.
+    The digest goes into the layer's environment, so a rotated certificate or
+    password changes the layer and replan restarts the service with the new
+    files.
     """
     h = hashlib.sha256()
     for path in sorted(files):
@@ -171,6 +175,7 @@ class FleetwireBridgeCharm(ops.CharmBase):
         files = {f"{PKI}/{name}": pki[key] for key, name in PKI_FILES.items()}
         if kafka.tls_ca:
             files[f"{PKI}/kafka-ca.pem"] = kafka.tls_ca
+        files[f"{SECRETS}/kafka-password"] = kafka.password
         own = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID, "make_dirs": True, "permissions": 0o600}
         for path, content in files.items():
             self._container.push(path, content, **own)
@@ -182,7 +187,7 @@ class FleetwireBridgeCharm(ops.CharmBase):
             "FLEETWIRE_KAFKA_BROKERS": kafka.endpoints,
             "FLEETWIRE_KAFKA_SASL_MECHANISM": "SCRAM-SHA-512",
             "FLEETWIRE_KAFKA_USERNAME": kafka.username,
-            "FLEETWIRE_KAFKA_PASSWORD": kafka.password,
+            "FLEETWIRE_KAFKA_PASSWORD_FILE": f"{SECRETS}/kafka-password",
             "FLEETWIRE_KAFKA_TLS": "true" if kafka.tls_ca else "false",
             "FLEETWIRE_BRIDGE_RECEIVE_MAXIMUM": str(self.config["receive-maximum"]),
             "FLEETWIRE_ADMIN_LISTEN": f":{ADMIN_PORT}",

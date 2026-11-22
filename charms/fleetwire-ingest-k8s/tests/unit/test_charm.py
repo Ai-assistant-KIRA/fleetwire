@@ -17,7 +17,7 @@ PKI = {"tls-cert": "INGEST CERT", "tls-key": "INGEST KEY", "ca-bundle": "CA BUND
 KAFKA = {
     "endpoints": "kafka-k8s-0.kafka-k8s-endpoints:9092",
     "username": "relation-11",
-    "password": "kafka-password",
+    "password": "fake-kafka-password",
     "tls": "disabled",
     "consumer-group-prefix": "fleetwire-",
     "topic": "fleetwire.*",
@@ -102,13 +102,19 @@ def env_of(out: testing.State) -> dict[str, str]:
     return out.get_container(CONTAINER).plan.services[SERVICE].environment
 
 
+def read(ctx: testing.Context, out: testing.State, path: str) -> str:
+    return (out.get_container(CONTAINER).get_filesystem(ctx) / path.lstrip("/")).read_text()
+
+
 def test_starts_with_its_database_login_kafka_keyring_and_broker(ctx):
     out = ctx.run(ctx.on.config_changed(), setup())
     env = env_of(out)
-    assert env["FLEETWIRE_DATABASE_URL"] == (
+    assert env["FLEETWIRE_DATABASE_URL_FILE"] == "/etc/fleetwire/secrets/database-url"
+    assert read(ctx, out, env["FLEETWIRE_DATABASE_URL_FILE"]) == (
         "postgres://relation_id_12:ingest-db-password@postgresql-k8s-primary.test.svc.cluster.local:5432/fleetwire"
         "?sslmode=prefer"
     )
+    assert read(ctx, out, env["FLEETWIRE_KAFKA_PASSWORD_FILE"]) == "fake-kafka-password"
     assert env["FLEETWIRE_KAFKA_BROKERS"] == KAFKA["endpoints"]
     assert env["FLEETWIRE_KAFKA_SASL_MECHANISM"] == "SCRAM-SHA-512"
     assert env["FLEETWIRE_KAFKA_USERNAME"] == "relation-11"
@@ -124,19 +130,55 @@ def test_starts_with_its_database_login_kafka_keyring_and_broker(ctx):
     assert out.unit_status == testing.WaitingStatus("waiting for ingest to become ready")
 
 
+def test_the_passwords_stay_out_of_the_plan_and_the_topic_command(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup())
+    c = out.get_container(CONTAINER)
+    # Anyone who can run `pebble plan` sees the layer.
+    plan = c.plan.to_yaml()
+    assert DB["password"] not in plan
+    assert KAFKA["password"] not in plan
+    (call,) = ctx.exec_history[CONTAINER]
+    assert KAFKA["password"] not in str(call.environment)
+    fs = c.get_filesystem(ctx)
+    for name in ("database-url", "kafka-password"):
+        assert (fs / "etc/fleetwire/secrets" / name).stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("relation", ["database", "kafka"])
+def test_a_new_password_restarts_ingest(ctx, relation):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    renewed = [
+        dataclasses.replace(r, remote_app_data={**r.remote_app_data, "password": "new-password"})
+        if r.endpoint == relation
+        else r
+        for r in running.relations
+    ]
+    out = ctx.run(ctx.on.update_status(), dataclasses.replace(running, relations=renewed))
+    assert env_of(out)["FLEETWIRE_CONFIG_SHA256"] != env_of(running)["FLEETWIRE_CONFIG_SHA256"]
+
+
 def test_opens_no_port_on_the_service(ctx):
     st = dataclasses.replace(setup(), opened_ports=[testing.TCPPort(9090)])
     out = ctx.run(ctx.on.config_changed(), st)
     assert not out.opened_ports
 
 
-def test_leader_creates_the_topics_once(ctx):
+def test_leader_creates_the_topics_once(ctx, monkeypatch):
+    # Records the password file's content when the command starts.
+    passwords = []
+    real_exec = ops.Container.exec
+
+    def exec_reading_the_password(self, command, **kw):
+        passwords.append(self.pull(kw["environment"]["FLEETWIRE_KAFKA_PASSWORD_FILE"]).read())
+        return real_exec(self, command, **kw)
+
+    monkeypatch.setattr(ops.Container, "exec", exec_reading_the_password)
     first = ctx.run(ctx.on.config_changed(), setup())
     calls = ctx.exec_history[CONTAINER]
     assert [c.command for c in calls] == [[BINARY, "ensure-topics"]]
     assert calls[0].environment["FLEETWIRE_KAFKA_REPLICATION"] == "3"
     assert (calls[0].user_id, calls[0].group_id) == (65532, 65532)
-    assert calls[0].environment["FLEETWIRE_KAFKA_PASSWORD"] == "kafka-password"
+    assert passwords == ["fake-kafka-password"]
     # It needs Kafka only: no database login, keyring or MQTT identity.
     unneeded = ("FLEETWIRE_DATABASE", "FLEETWIRE_KEYRING", "FLEETWIRE_MQTT")
     assert not [k for k in calls[0].environment if k.startswith(unneeded)]
@@ -323,7 +365,7 @@ def test_ingest_stops_while_the_api_has_migrations_due_and_starts_after(ctx):
 
 def test_database_tls_is_verified_when_postgresql_offers_it(ctx):
     out = ctx.run(ctx.on.config_changed(), setup(db={**DB, "tls": "True", "tls-ca": "PG CA"}))
-    assert env_of(out)["FLEETWIRE_DATABASE_URL"].endswith(
+    assert read(ctx, out, env_of(out)["FLEETWIRE_DATABASE_URL_FILE"]).endswith(
         "?sslmode=verify-full&sslrootcert=/etc/fleetwire/pki/postgresql-ca.pem"
     )
     fs = out.get_container(CONTAINER).get_filesystem(ctx)

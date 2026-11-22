@@ -17,7 +17,7 @@ PKI = {"tls-cert": "BRIDGE CERT", "tls-key": "BRIDGE KEY", "ca-bundle": "CA BUND
 KAFKA = {
     "endpoints": "kafka-k8s-0.kafka-k8s-endpoints:9092",
     "username": "relation-12",
-    "password": "kafka-password",
+    "password": "fake-kafka-password",
     "tls": "disabled",
     "topic": TOPIC,
 }
@@ -81,13 +81,23 @@ def test_starts_with_kafka_and_the_broker(ctx):
     env = out.get_container(CONTAINER).plan.services[SERVICE].environment
     assert env["FLEETWIRE_KAFKA_BROKERS"] == KAFKA["endpoints"]
     assert env["FLEETWIRE_KAFKA_SASL_MECHANISM"] == "SCRAM-SHA-512"
-    assert env["FLEETWIRE_KAFKA_PASSWORD"] == "kafka-password"
+    assert env["FLEETWIRE_KAFKA_PASSWORD_FILE"] == "/etc/fleetwire/secrets/kafka-password"
     assert env["FLEETWIRE_MQTT_URL"] == "tls://mosquitto-k8s.test.svc:8884"
     assert env["FLEETWIRE_BRIDGE_RECEIVE_MAXIMUM"] == "1000"
     assert out.get_container(CONTAINER).plan.services[SERVICE].user_id == 65532
     fs = out.get_container(CONTAINER).get_filesystem(ctx)
     assert (fs / "etc/fleetwire/pki/bridge.pem").read_text() == "BRIDGE CERT"
+    assert (fs / "etc/fleetwire/secrets/kafka-password").read_text() == "fake-kafka-password"
     assert out.unit_status == testing.WaitingStatus("waiting for the bridge to become ready")
+
+
+def test_the_kafka_password_stays_out_of_the_plan(ctx):
+    out = ctx.run(ctx.on.config_changed(), setup())
+    c = out.get_container(CONTAINER)
+    # Anyone who can run `pebble plan` sees the layer.
+    assert KAFKA["password"] not in c.plan.to_yaml()
+    # The service reads it from a file only its user can read.
+    assert (c.get_filesystem(ctx) / "etc/fleetwire/secrets/kafka-password").stat().st_mode & 0o777 == 0o600
 
 
 def test_opens_no_port_on_the_service(ctx):
@@ -170,6 +180,19 @@ def test_a_new_kafka_ca_restarts_the_bridge(ctx):
     st = dataclasses.replace(running, relations=[r for r in running.relations if r.endpoint != "kafka"] + [renewed])
     # Whichever hook runs next writes the new CA; update-status always runs.
     out = ctx.run(ctx.on.update_status(), st)
+    after = out.get_container(CONTAINER).plan.services[SERVICE].environment
+    assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
+
+
+def test_a_new_kafka_password_restarts_the_bridge(ctx):
+    running = ctx.run(ctx.on.config_changed(), setup())
+    before = running.get_container(CONTAINER).plan.services[SERVICE].environment
+    kafka = next(r for r in running.relations if r.endpoint == "kafka")
+    renewed = dataclasses.replace(kafka, remote_app_data={**KAFKA, "password": "new-password"})
+    st = dataclasses.replace(running, relations=[r for r in running.relations if r.endpoint != "kafka"] + [renewed])
+    out = ctx.run(ctx.on.update_status(), st)
+    fs = out.get_container(CONTAINER).get_filesystem(ctx)
+    assert (fs / "etc/fleetwire/secrets/kafka-password").read_text() == "new-password"
     after = out.get_container(CONTAINER).plan.services[SERVICE].environment
     assert after["FLEETWIRE_CONFIG_SHA256"] != before["FLEETWIRE_CONFIG_SHA256"]
 

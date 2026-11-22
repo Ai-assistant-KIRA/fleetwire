@@ -40,6 +40,21 @@ def not_ready(monkeypatch):
     monkeypatch.setattr(charm, "readyz", lambda port: False)
 
 
+@pytest.fixture(autouse=True)
+def owner_urls(monkeypatch) -> list[str]:
+    """The owner URL file's content at the start of each one-off command."""
+    seen: list[str] = []
+    real_exec = ops.Container.exec
+
+    def exec_reading_the_owner_url(self, command, **kw):
+        if path := (kw.get("environment") or {}).get("FLEETWIRE_DATABASE_OWNER_URL_FILE"):
+            seen.append(self.pull(path).read())
+        return real_exec(self, command, **kw)
+
+    monkeypatch.setattr(ops.Container, "exec", exec_reading_the_owner_url)
+    return seen
+
+
 def pki_secret(**changes: str) -> testing.Secret:
     content = {k: v for k, v in {**PKI, **changes}.items() if v}
     return testing.Secret(tracked_content=content)
@@ -93,6 +108,10 @@ def state(secret: testing.Secret | None = None, *, config: dict | None = None, r
 
 def env_of(out: testing.State) -> dict[str, str]:
     return out.get_container(CONTAINER).plan.services[SERVICE].environment
+
+
+def read(ctx: testing.Context, out: testing.State, path: str) -> str:
+    return (out.get_container(CONTAINER).get_filesystem(ctx) / path.lstrip("/")).read_text()
 
 
 def peer_of(out: testing.State) -> testing.PeerRelation:
@@ -150,7 +169,7 @@ def test_blocked_without_a_device_broker_url(ctx):
     assert out.unit_status == testing.BlockedStatus("set device-broker-url (the broker address devices use)")
 
 
-def test_leader_migrates_as_owner_and_the_service_runs_as_its_own_login(ctx):
+def test_leader_migrates_as_owner_and_the_service_runs_as_its_own_login(ctx, owner_urls):
     out = ctx.run(ctx.on.config_changed(), state(pki_secret()))
 
     (call,) = ctx.exec_history[CONTAINER]
@@ -158,19 +177,49 @@ def test_leader_migrates_as_owner_and_the_service_runs_as_its_own_login(ctx):
     # Not root: the image's nonroot user, like the service.
     assert (call.user_id, call.group_id) == (65532, 65532)
     assert call.environment == {
-        "FLEETWIRE_DATABASE_OWNER_URL": f"postgres://relation_id_7:owner-pw@{ENDPOINTS}/fleetwire?sslmode=prefer",
+        "FLEETWIRE_DATABASE_OWNER_URL_FILE": "/etc/fleetwire/secrets/database-owner-url",
         # The policies and grants go to the group every runtime login is in.
         "FLEETWIRE_DATABASE_RUNTIME_ROLE": "charmed_dml",
     }
+    assert owner_urls == [f"postgres://relation_id_7:owner-pw@{ENDPOINTS}/fleetwire?sslmode=prefer"]
     env = env_of(out)
-    assert env["FLEETWIRE_DATABASE_URL"] == f"postgres://relation_id_9:runtime-pw@{ENDPOINTS}/fleetwire?sslmode=prefer"
-    # The owner's credentials never reach the service.
+    assert env["FLEETWIRE_DATABASE_URL_FILE"] == "/etc/fleetwire/secrets/database-url"
+    assert read(ctx, out, env["FLEETWIRE_DATABASE_URL_FILE"]) == (
+        f"postgres://relation_id_9:runtime-pw@{ENDPOINTS}/fleetwire?sslmode=prefer"
+    )
+    # The owner's credentials never reach the service: the file exists only
+    # while a one-off command runs.
     assert "relation_id_7" not in str(env)
-    assert "owner-pw" not in str(env)
+    assert not (out.get_container(CONTAINER).get_filesystem(ctx) / "etc/fleetwire/secrets/database-owner-url").exists()
     assert env["FLEETWIRE_DEVICE_BROKER_URL"] == "tls://broker.example:8883"
     assert env["FLEETWIRE_DEVICE_API_URL"] == "https://fleetwire-api-k8s.test.svc.cluster.local:8444"
     assert env["FLEETWIRE_API_INTERNAL_LISTEN"] == ":8445"
     assert out.unit_status == testing.WaitingStatus("waiting for the API to become ready")
+
+
+def test_the_passwords_stay_out_of_the_plan_and_the_commands(ctx):
+    out = ctx.run(ctx.on.config_changed(), state(pki_secret()))
+    c = out.get_container(CONTAINER)
+    # Anyone who can run `pebble plan` sees the layer.
+    plan = c.plan.to_yaml()
+    assert RUNTIME["password"] not in plan
+    assert OWNER["password"] not in plan
+    (call,) = ctx.exec_history[CONTAINER]
+    assert OWNER["password"] not in str(call.environment)
+    assert (c.get_filesystem(ctx) / "etc/fleetwire/secrets/database-url").stat().st_mode & 0o777 == 0o600
+
+
+def test_a_new_runtime_password_restarts_the_api(ctx):
+    running = ctx.run(ctx.on.config_changed(), state(pki_secret()))
+    renewed = [
+        dataclasses.replace(r, remote_app_data={**RUNTIME, "password": "fake-new-runtime-password"})
+        if r.endpoint == "runtime-database"
+        else r
+        for r in running.relations
+    ]
+    out = ctx.run(ctx.on.update_status(), dataclasses.replace(running, relations=renewed))
+    assert "fake-new-runtime-password" in read(ctx, out, "/etc/fleetwire/secrets/database-url")
+    assert env_of(out)["FLEETWIRE_CONFIG_SHA256"] != env_of(running)["FLEETWIRE_CONFIG_SHA256"]
 
 
 def test_the_service_carries_the_api_listeners_but_not_the_admin_one(ctx):
@@ -267,6 +316,7 @@ def test_failed_migrations_keep_the_service_down(ctx):
     out = ctx.run(ctx.on.config_changed(), state(pki_secret(), containers=[container(migrate_code=1)]))
     assert SERVICE not in out.get_container(CONTAINER).plan.services
     assert "migrated" not in peer_of(out).local_app_data
+    assert not (out.get_container(CONTAINER).get_filesystem(ctx) / "etc/fleetwire/secrets/database-owner-url").exists()
     assert out.unit_status == testing.WaitingStatus("waiting for migrations on the leader")
 
 
@@ -305,13 +355,13 @@ def test_database_tls_is_verified_when_postgresql_offers_it(ctx):
         runtime_db({**RUNTIME, "tls": "True", "tls-ca": "PG CA"}),
     ]
     out = ctx.run(ctx.on.config_changed(), state(pki_secret(), relations=rels))
-    url = env_of(out)["FLEETWIRE_DATABASE_URL"]
+    url = read(ctx, out, env_of(out)["FLEETWIRE_DATABASE_URL_FILE"])
     assert url.endswith("?sslmode=verify-full&sslrootcert=/etc/fleetwire/pki/postgresql-ca.pem")
     fs = out.get_container(CONTAINER).get_filesystem(ctx)
     assert (fs / "etc/fleetwire/pki/postgresql-ca.pem").read_text() == "PG CA"
 
 
-def test_credentials_in_a_relation_secret_are_used(ctx):
+def test_credentials_in_a_relation_secret_are_used(ctx, owner_urls):
     # Charmed PostgreSQL on Juju 3 sends the user and password in a secret.
     user = testing.Secret(tracked_content={"username": "relation_id_11", "password": "from-secret"})
     own = owner_db({"endpoints": ENDPOINTS, "database": "fleetwire", "secret-user": user.id})
@@ -325,8 +375,8 @@ def test_credentials_in_a_relation_secret_are_used(ctx):
         model=st.model,
     )
     ctx.run(ctx.on.config_changed(), st)
-    (call,) = ctx.exec_history[CONTAINER]
-    assert call.environment["FLEETWIRE_DATABASE_OWNER_URL"].startswith("postgres://relation_id_11:from-secret@")
+    (url,) = owner_urls
+    assert url.startswith("postgres://relation_id_11:from-secret@")
 
 
 def test_more_than_one_unit_is_refused(ctx):
@@ -360,7 +410,7 @@ def test_non_leader_waits_for_the_leader(ctx):
     assert out.unit_status == testing.WaitingStatus("waiting for migrations on the leader")
 
 
-def test_create_operator_token_action_returns_the_token_once(ctx):
+def test_create_operator_token_action_returns_the_token_once(ctx, owner_urls):
     running = ctx.run(ctx.on.config_changed(), state(pki_secret()))
     token = "fwo_" + "0" * 32 + "_" + "a" * 52
     c = running.get_container(CONTAINER)
@@ -384,7 +434,8 @@ def test_create_operator_token_action_returns_the_token_once(ctx):
     (call,) = ctx.exec_history[CONTAINER][-1:]
     assert call.command == [BINARY, "create-operator-token", "-name", "ops-alice"]
     assert (call.user_id, call.group_id) == (65532, 65532)
-    assert call.environment["FLEETWIRE_DATABASE_OWNER_URL"].startswith("postgres://relation_id_7:owner-pw@")
+    assert call.environment == {"FLEETWIRE_DATABASE_OWNER_URL_FILE": "/etc/fleetwire/secrets/database-owner-url"}
+    assert owner_urls[-1].startswith("postgres://relation_id_7:owner-pw@")
 
 
 def test_create_operator_token_fails_before_migrations(ctx):
