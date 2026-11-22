@@ -188,10 +188,12 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 		if ierr != nil {
 			return fmt.Errorf("agent not reachable (%w) and state unreadable: %w", err, ierr)
 		}
+		// The daemon is this same binary, so its version is the
+		// installed one.
 		st = map[string]any{
 			"running": false, "device_id": in.State.DeviceID, "last_seq": max(in.LastSeq, in.State.MaxSeqEver),
 			"acked": in.State.Acked, "pending_gaps": in.State.PendingGaps, "gaps": in.State.GapHistory,
-			"wal_bytes": in.Bytes, "wal_segments": in.Segments,
+			"wal_bytes": in.Bytes, "wal_segments": in.Segments, "version": buildinfo.Get().Version,
 		}
 	}
 	if asJSON {
@@ -202,7 +204,7 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 		_, err = fmt.Fprintln(out, string(b))
 		return err
 	}
-	for _, k := range []string{"running", "device_id", "connected", "last_seq", "acked", "pending_gaps", "gaps", "wal_bytes", "wal_segments", "cert_not_after"} {
+	for _, k := range []string{"running", "version", "device_id", "connected", "last_seq", "acked", "pending_gaps", "gaps", "wal_bytes", "wal_segments", "cert_not_after"} {
 		if v, ok := st[k]; ok {
 			fmt.Fprintf(out, "%-15s %v\n", k+":", v)
 		}
