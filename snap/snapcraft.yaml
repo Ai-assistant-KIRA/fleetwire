@@ -22,6 +22,14 @@ platforms:
 
 apps:
   daemon:
+    # Runs as root, as snapd starts daemons. Dropping to the snap_daemon
+    # system user (system-usernames, setpriv in a wrapper) was tried on
+    # snapd 2.78 and needs more than packaging: the agent keeps its state
+    # directly in $SNAP_DATA, which snapd creates root-owned, and the
+    # snap's AppArmor profile denied the install and post-refresh hooks'
+    # chown of $SNAP_DATA itself. The state first has to move to a
+    # subdirectory the hooks can hand over, with existing devices'
+    # identity and log moved there on refresh.
     command: bin/fleetwire-agent run
     daemon: simple
     restart-condition: always
