@@ -45,6 +45,13 @@ so the runner cannot see a recovery faster than about 5 to 10 s. For
 devices' reconnect backoff (full jitter, up to 60 s), so it is often close
 to a minute after long outages.
 
+The runner queries that p99 every 2 s from the end of the fault and stops
+at the first value under 5 s. The 20 s window can still hold mostly
+readings committed before or during the fault, so the first query can pass
+before a backlog reaches the database. A recovery of `0s` in the recorded
+tables says that the first query passed, not that the backlog was already
+stored.
+
 Results go to `docs/results/<time>-<commit>.md` and `.json`. Raw logs,
 `results.jsonl` and checker reports go to `docs/results/raw/` (git-ignored).
 Each device's local log and keys are deleted once the checker has read

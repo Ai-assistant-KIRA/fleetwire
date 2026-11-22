@@ -40,7 +40,9 @@ instances in one process, injects the fault (or kills the process), keeps
 the load on, and then reads everything back from the database, decrypted.
 A scenario passes only with 0 missing and 0 duplicate seqs. Recovery is the
 time from the end of the fault until the p99 delay from collection to
-commit is under 5 s again.
+commit is under 5 s again. A `0s` means the first check, right after the
+fault, passed; it can pass before a backlog is stored
+([how it is measured](docs/how-to/run-failure-tests.md)).
 
 All runs below used one UpCloud VM (4 vCPU AMD EPYC 9575F, 8 GB RAM,
 Ubuntu 26.04) for the load generator, the whole stack and the observability
