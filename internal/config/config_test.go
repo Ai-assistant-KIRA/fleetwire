@@ -153,14 +153,17 @@ func writeFile(t *testing.T, content string, perm os.FileMode) string {
 }
 
 func TestSecretsCanComeFromFiles(t *testing.T) {
-	for content, want := range map[string]string{
-		"postgres://app:s3cr3t@db/fw":       "postgres://app:s3cr3t@db/fw",
-		"postgres://app:s3cr3t@db/fw\n":     "postgres://app:s3cr3t@db/fw",
-		"postgres://app:s3cr3t@db/fw\r\n":   "postgres://app:s3cr3t@db/fw",
-		"postgres://app:s3cr3t@db/fw\n\n":   "postgres://app:s3cr3t@db/fw\n",
-		" postgres://app:s3cr3t@db/fw \n":   " postgres://app:s3cr3t@db/fw ",
-		"postgres://app:s3cr3t@db/fw\n\r\n": "postgres://app:s3cr3t@db/fw\n",
+	const url = "postgres://app:s3cr3t@db/fw"
+	for _, tc := range []struct{ content, want string }{
+		{url, url},
+		{url + "\n", url},
+		{url + "\r\n", url},
+		{url + "\n\n", url + "\n"},
+		{url + "\n\r\n", url + "\n"},
+		// Only the newline goes; other whitespace is part of the value.
+		{" " + url + " \n", " " + url + " "},
 	} {
+		content, want := tc.content, tc.want
 		t.Setenv("T_URL_FILE", writeFile(t, content, 0o600))
 		var c sample
 		if err := Load(&c, flag.NewFlagSet("x", flag.ContinueOnError), nil); err != nil {
