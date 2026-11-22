@@ -310,6 +310,40 @@ func TestDiskBudgetDropsOldestAsGap(t *testing.T) {
 	}
 }
 
+// When the state cannot be saved, the disk budget keeps the oldest segment,
+// and its seqs must not become a gap in memory either: the records are
+// still on disk and will be sent.
+func TestDiskBudgetKeepsStateWhenSaveFails(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{Dir: dir, Sync: SyncAlways, SegmentSize: 256, MaxSize: 1024}
+	l, _ := open(t, opts)
+	defer l.Close()
+	stateHook = func(string) error { return errors.New("disk full") }
+	t.Cleanup(func() { stateHook = nil })
+	appendN(t, l, 200)
+	if gaps, history := l.PendingGaps(), l.GapHistory(); len(gaps) != 0 || len(history) != 0 {
+		t.Fatalf("pending gaps %v, history %v for segments that were kept", gaps, history)
+	}
+	if st := l.Stats(); st.DroppedTotal != 0 || st.Bytes <= opts.MaxSize {
+		t.Fatalf("dropped %d readings, log is %d bytes; want nothing dropped, over budget", st.DroppedTotal, st.Bytes)
+	}
+	if recs := readAll(t, l, 1); len(recs) != 200 || recs[0].Seq != 1 {
+		t.Fatalf("%d records readable, want all 200", len(recs))
+	}
+	// Saving works again: the next segment roll drops the oldest segments
+	// as a gap, and memory and disk agree on it.
+	stateHook = nil
+	appendN(t, l, 20)
+	gaps := l.PendingGaps()
+	if len(gaps) != 1 || gaps[0].From != 1 || gaps[0].Reason != GapDiskBudget {
+		t.Fatalf("gaps = %v, want one DISK_BUDGET gap from seq 1", gaps)
+	}
+	st, err := LoadState(dir)
+	if err != nil || !slices.Equal(st.PendingGaps, gaps) {
+		t.Fatalf("state on disk %+v, %v; want gaps %v", st, err, gaps)
+	}
+}
+
 func TestInspectIsReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	l, _ := open(t, Options{Dir: dir, Sync: SyncAlways, SegmentSize: 256})

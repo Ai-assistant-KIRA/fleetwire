@@ -523,6 +523,7 @@ func (l *Log) enforceBudgetLocked() {
 	for len(l.segs) > 1 && l.totalBytes() > l.opts.MaxSize {
 		old := l.segs[0]
 		var gap *Gap
+		before := l.state.clone()
 		if old.count > 0 && old.last() > l.state.Acked {
 			g := Gap{From: max(old.first, l.state.Acked+1), To: old.last(), Reason: GapDiskBudget}
 			gap = &g
@@ -530,6 +531,11 @@ func (l *Log) enforceBudgetLocked() {
 		}
 		if err := l.persistLocked(); err != nil {
 			// Better over budget than losing the record of a dropped range.
+			// The segment stays, so its seqs are not a gap. Reporting one
+			// could make the server record them as lost and then drop the
+			// readings, which the device still has and sends, as covered;
+			// and the next save would write the gap next to the records.
+			l.state = before
 			l.log.Error("wal over budget but state could not be saved; keeping segment", "err", err)
 			return
 		}
