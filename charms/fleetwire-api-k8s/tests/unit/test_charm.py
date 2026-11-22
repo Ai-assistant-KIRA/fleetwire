@@ -155,6 +155,8 @@ def test_leader_migrates_as_owner_and_the_service_runs_as_its_own_login(ctx):
 
     (call,) = ctx.exec_history[CONTAINER]
     assert call.command == [BINARY, "migrate"]
+    # Not root: the image's nonroot user, like the service.
+    assert (call.user_id, call.group_id) == (65532, 65532)
     assert call.environment == {
         "FLEETWIRE_DATABASE_OWNER_URL": f"postgres://relation_id_7:owner-pw@{ENDPOINTS}/fleetwire?sslmode=prefer",
         # The policies and grants go to the group every runtime login is in.
@@ -375,6 +377,7 @@ def test_create_operator_token_action_returns_the_token_once(ctx):
     assert ctx.action_results == {"token": token}
     (call,) = ctx.exec_history[CONTAINER][-1:]
     assert call.command == [BINARY, "create-operator-token", "-name", "ops-alice"]
+    assert (call.user_id, call.group_id) == (65532, 65532)
     assert call.environment["FLEETWIRE_DATABASE_OWNER_URL"].startswith("postgres://relation_id_7:owner-pw@")
 
 

@@ -29,6 +29,8 @@ CONTAINER = "ingest"
 SERVICE = "fleetwire-ingest"
 BINARY = "/usr/local/bin/service"
 PKI = "/etc/fleetwire/pki"
+# The distroless images' nonroot user. Pebble runs the service and the
+# one-off commands as this user; the charm writes files for it.
 WORKLOAD_UID = 65532
 ADMIN_PORT = 9090
 PEER = "ingest-peers"
@@ -336,7 +338,13 @@ class FleetwireIngestCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("creating Kafka topics")
         topics_env = {k: v for k, v in env.items() if k in TOPICS_ENV}
         try:
-            self._container.exec([BINARY, "ensure-topics"], environment=topics_env, timeout=600).wait_output()
+            self._container.exec(
+                [BINARY, "ensure-topics"],
+                environment=topics_env,
+                user_id=WORKLOAD_UID,
+                group_id=WORKLOAD_UID,
+                timeout=600,
+            ).wait_output()
         except ops.pebble.ExecError as e:
             logger.error("ensure-topics failed (exit %s): %s", e.exit_code, e.stderr)
             return False

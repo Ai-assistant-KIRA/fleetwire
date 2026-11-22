@@ -36,8 +36,10 @@ SERVICE = "fleetwire-api"
 BINARY = "/usr/local/bin/service"
 DATA = "/var/lib/fleetwire"
 PKI = "/etc/fleetwire/pki"
-# The distroless images run as nonroot (65532); files are written for it.
+# The distroless images run as nonroot (65532); files are written for it,
+# and Pebble runs the service and the one-off commands as that user.
 WORKLOAD_UID = 65532
+AS_WORKLOAD = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID}
 PUBLIC_PORT, DEVICE_PORT, INTERNAL_PORT, ADMIN_PORT = 8443, 8444, 8445, 9090
 DATABASE_NAME = "fleetwire"
 # The Charmed PostgreSQL group every runtime relation user joins
@@ -281,7 +283,7 @@ class FleetwireApiCharm(ops.CharmBase):
         cmd = [BINARY, "create-operator-token", "-name", str(event.params["name"])]
         try:
             out, _ = self._container.exec(
-                cmd, environment={"FLEETWIRE_DATABASE_OWNER_URL": owner.url}, timeout=60
+                cmd, environment={"FLEETWIRE_DATABASE_OWNER_URL": owner.url}, timeout=60, **AS_WORKLOAD
             ).wait_output()
         except ops.pebble.ExecError as e:
             event.fail(f"create-operator-token failed: {str(e.stderr).strip()}")
@@ -322,7 +324,8 @@ class FleetwireApiCharm(ops.CharmBase):
         self.unit.status = ops.MaintenanceStatus("running database migrations")
         env = {"FLEETWIRE_DATABASE_OWNER_URL": owner.url, "FLEETWIRE_DATABASE_RUNTIME_ROLE": RUNTIME_ROLE}
         try:
-            out, _ = self._container.exec([BINARY, "migrate"], environment=env, timeout=600).wait_output()
+            proc = self._container.exec([BINARY, "migrate"], environment=env, timeout=600, **AS_WORKLOAD)
+            out, _ = proc.wait_output()
         except ops.pebble.ExecError as e:
             # Neither stream carries credentials: the command redacts secrets.
             logger.error("migrations failed (exit %s): %s", e.exit_code, e.stderr)

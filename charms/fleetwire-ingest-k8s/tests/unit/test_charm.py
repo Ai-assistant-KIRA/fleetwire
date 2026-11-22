@@ -129,6 +129,7 @@ def test_leader_creates_the_topics_once(ctx):
     calls = ctx.exec_history[CONTAINER]
     assert [c.command for c in calls] == [[BINARY, "ensure-topics"]]
     assert calls[0].environment["FLEETWIRE_KAFKA_REPLICATION"] == "3"
+    assert (calls[0].user_id, calls[0].group_id) == (65532, 65532)
     assert calls[0].environment["FLEETWIRE_KAFKA_PASSWORD"] == "kafka-password"
     # It needs Kafka only: no database login, keyring or MQTT identity.
     unneeded = ("FLEETWIRE_DATABASE", "FLEETWIRE_KEYRING", "FLEETWIRE_MQTT")
