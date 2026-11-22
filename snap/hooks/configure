@@ -4,7 +4,13 @@
 # uses the same parser and rules as the daemon itself.
 set -eu
 "$SNAP/bin/fleetwire-agent" config check
-# Restart only a running daemon; on install, snapd starts it afterwards.
-if snapctl services "$SNAP_INSTANCE_NAME.daemon" | grep -q " active"; then
+# Restart only a running daemon, so it picks up the new settings. (On
+# install snapd starts the services before this hook, so a new install
+# restarts the daemon once.) The status is captured before it is parsed: in
+# a pipe, a failing snapctl would look like a stopped daemon, and the new
+# settings would wait silently for the next restart.
+services=$(snapctl services "$SNAP_INSTANCE_NAME.daemon")
+current=$(printf '%s\n' "$services" | awk 'NR == 2 { print $3 }')
+if [ "$current" = active ]; then
   snapctl restart "$SNAP_INSTANCE_NAME.daemon"
 fi
