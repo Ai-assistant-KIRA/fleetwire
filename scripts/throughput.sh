@@ -38,15 +38,20 @@ q() { # instant query, one number ("nan" when there is no data)
     jq -r '.data.result[0].value[1] // "nan"'
 }
 
-if [ ! -s "$state/tenant-token" ]; then
-  mkdir -p "$state"
-  op=$(make -s operator-token NAME="throughput-$(date +%s)" 2>/dev/null)
-  tenant=$(bin/fwctl -url $api -ca-file $ca -token "$op" -o json tenant create -name "throughput-$(date +%H%M%S)" | jq -r .id)
-  bin/fwctl -url $api -ca-file $ca -token "$op" -o json token create -tenant "$tenant" -name throughput \
-    -scopes devices:read,devices:admin,readings:read | jq -r .token > "$state/tenant-token"
-fi
-
 mkdir -p "$state"
+if [ ! -s "$state/tenant-token" ]; then
+  # Tokens go to fwctl in its environment, not on the command line, where
+  # every local user can read them in the process list.
+  op=$(make -s operator-token NAME="throughput-$(date +%s)" 2>/dev/null)
+  tenant=$(FWCTL_TOKEN=$op bin/fwctl -url $api -ca-file $ca -o json tenant create -name "throughput-$(date +%H%M%S)" | jq -r .id)
+  (
+    umask 077
+    FWCTL_TOKEN=$op bin/fwctl -url $api -ca-file $ca -o json token create -tenant "$tenant" -name throughput \
+      -scopes devices:read,devices:admin,readings:read | jq -r .token > "$state/tenant-token"
+  )
+fi
+# Owner only, also for a token an older version of this script wrote 0644.
+chmod 0600 "$state/tenant-token"
 # As in the chaos tables: on one machine every device's fsyncs reach the
 # same disk as PostgreSQL's, unless the state is on tmpfs.
 if [ "$(stat -f -c %T "$state")" = tmpfs ]; then

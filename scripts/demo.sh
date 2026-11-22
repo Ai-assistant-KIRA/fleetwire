@@ -28,7 +28,9 @@ command -v jq >/dev/null || { echo "demo.sh needs jq" >&2; exit 1; }
 mkdir -p "$STATE"
 chmod 700 "$STATE"
 
-fw() { local tok=$1; shift; bin/fwctl -url "$API" -ca-file "$CA" -token "$tok" "$@"; }
+# The token goes to fwctl in its environment: on the command line every
+# local user could read it in the process list.
+fw() { local tok=$1; shift; FWCTL_TOKEN=$tok bin/fwctl -url "$API" -ca-file "$CA" "$@"; }
 
 echo "== operator token"
 op=$($COMPOSE run --rm --no-deps -T migrate create-operator-token -name "demo-$(date +%s)" 2>/dev/null)
@@ -68,7 +70,7 @@ cat <<EOF
 
 The agents keep sending until you run: make demo-stop
   Tenant token:  $STATE/tenant-token
-  API:           bin/fwctl -url $API -ca-file $CA -token \$(cat $STATE/tenant-token) device list
+  API:           FWCTL_TOKEN=\$(cat $STATE/tenant-token) bin/fwctl -url $API -ca-file $CA device list
   Grafana:       http://localhost:3000   (dashboard "fleetwire")
   Prometheus:    http://localhost:9090
   Jaeger:        http://localhost:16686  (service fleetwire-ingest)
