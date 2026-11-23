@@ -45,7 +45,7 @@ resources:
   mosquitto-image:
     type: oci-image
     description: Eclipse Mosquitto 2.x image.
-    upstream-source: eclipse-mosquitto:2.1.2-alpine
+    upstream-source: eclipse-mosquitto:2.1.4-alpine
 
 storage:
   data:

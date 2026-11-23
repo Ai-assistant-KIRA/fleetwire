@@ -1,5 +1,5 @@
 # Jaeger all-in-one for the development stack: the image's default
-# configuration (jaeger v2.11.0, cmd/jaeger/internal/all-in-one.yaml) with a
+# configuration (jaeger v2.23.0, cmd/jaeger/internal/all-in-one.yaml) with a
 # smaller in-memory store and only the OTLP receiver the services use.
 #
 # The default keeps 100,000 traces in memory. At the stack's 10% sampling a

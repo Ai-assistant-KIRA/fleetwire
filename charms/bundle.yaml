@@ -52,7 +52,7 @@ applications:
     charm: ./mosquitto-k8s/mosquitto-k8s_amd64.charm
     scale: 1
     resources:
-      mosquitto-image: eclipse-mosquitto:2.1.2-alpine
+      mosquitto-image: eclipse-mosquitto:2.1.4-alpine
 relations:
   # The API's schema owner (migrations) and its own runtime login.
   - [fleetwire-api-k8s:database, postgresql-k8s:database]
