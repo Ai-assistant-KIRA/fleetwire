@@ -43,6 +43,9 @@ in Go.
   both shapes: ingest kept up with 1,000 rows/s of one reading each, and
   with 500 rows/s of 64 readings each, 32,000 readings/s
   ([table](../results/2026-11-10T044759Z-add94424b241-throughput.md)).
+  The search of 2026-11-23, on a 4 vCPU EC2 host, kept up with 2,000 rows/s
+  of one reading each, its highest step
+  ([table](../results/2026-11-23T185446Z-8ffb129828b1-throughput.md)).
 - Queries filtered by metric decrypt whole chunks; a narrow query over a
   long window costs more CPU than an indexed lookup would.
 - Aggregations (averages, downsampling) happen in the client or a future

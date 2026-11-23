@@ -159,9 +159,11 @@ The script sets `collect.interval=200ms` and `wal.sync=interval`, then ten
 times waits 5 to 30 s and sends QMP `system_reset`: a hard reset with no
 clean shutdown. Each collection writes 11 readings from the built-in
 collectors, plus one per thermal zone, so a VM without thermal zones
-writes about 55 readings/s while the agent runs. The recorded run's 9,089
-readings come to about 165 s of collecting; the rest of its 17 minutes
-went to rebooting under software emulation and to the final drain.
+writes about 55 readings/s while the agent runs. The recorded run on
+Ubuntu Core 24 ([table](../results/2026-11-23T195718Z-b0047ec26411-poweroff.md))
+stored 6,293 readings, about 115 s of collecting; the rest of its 22
+minutes went to rebooting under software emulation and to the final drain.
+It ran with a guest SSH key of its own: `UC_SSH_KEY=<key> UC_USER=<user>`.
 
 After the last boot the script waits until the agent's last seq is
 acked, reads `fleetwire-agent status -json` over SSH, and runs the checker

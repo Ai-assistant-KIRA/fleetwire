@@ -94,9 +94,13 @@ configuration this way on Ubuntu Core 24.
   SSH key** to create the first user. The scripts take the account e-mail as
   input; this step cannot be automated without such an account or a custom
   signed model.
-- The build VM (UpCloud, AMD EPYC under KVM) does **not** expose `/dev/kvm`,
-  so QEMU runs with TCG software emulation. Boot is slow; the power-off test
-  records the time it takes.
+- Neither build host (first an UpCloud VM, then an AWS EC2 m7i-flex
+  instance) exposes `/dev/kvm`, so QEMU runs with TCG software emulation.
+  Boot is slow; the power-off test records the time it takes.
+- Ubuntu Core 24 ships snapd 2.63. Its default AppArmor template does not
+  let a snap execute `/usr/bin/setpriv` (allowed from snapd 2.68) or read
+  its own `/proc/<pid>/mountinfo` (allowed from 2.72), so the agent drops
+  privileges itself; see ADR-0013.
 
 ## 6. Charmed Kafka and PostgreSQL on Kubernetes
 

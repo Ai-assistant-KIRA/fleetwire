@@ -46,68 +46,71 @@ A scenario passes only with 0 missing and 0 duplicate seqs. Recovery is the
 time from the end of the fault until every device is connected again and
 the p99 delay from collection to commit, over readings stored after the
 fault, is under 5 s, both holding for 30 s; for the agent kill it includes
-reopening every device. The tables below were measured with an earlier
-method that checked only the p99, over a window that still held readings
-stored before the fault ended, so a `0s` there means the first check right
-after the fault passed, possibly before a backlog was stored
+reopening every device. Prometheus scrapes every 5 s, so no recovery can
+come out below about 5 to 10 s
 ([how it is measured](docs/how-to/run-failure-tests.md)).
 
-All runs below used one UpCloud VM (4 vCPU AMD EPYC 9575F, 8 GB RAM,
-Ubuntu 26.04) for the load generator, the whole stack and the observability
-tools, at commit `add94424b241`. The tables, with the exact commands, are in
-[`docs/results/`](docs/results/).
+All runs used one AWS EC2 m7i-flex.xlarge (4 vCPU Intel Xeon Platinum
+8488C, 16 GB RAM, Ubuntu 24.04) for the load generator, the whole stack and
+the observability tools, at commit `8ffb129828b1`. The tables, with the
+exact commands, are in [`docs/results/`](docs/results/).
 
 **2,000 devices**, one reading every 10 s each, device state on disk
-(`make chaos`):
+(`make chaos`, [table](docs/results/2026-11-23T161203Z-8ffb129828b1.md)):
 
 | Scenario | Readings | Missing | Duplicates | Recovery | Result |
 |---|---:|---:|---:|---:|---|
-| network cut, 60 s | 44,314 | 0 | 0 | 1m16s | PASS |
-| network degraded (300 ± 200 ms, 512 KB/s, 5% resets), 120 s | 51,659 | 0 | 0 | 0s | PASS |
-| Mosquitto restart | 23,604 | 0 | 0 | 0s | PASS |
-| one Kafka broker killed, 60 s | 35,667 | 0 | 0 | 0s | PASS |
-| all Kafka brokers stopped, 60 s | 41,088 | 0 | 0 | 52s | PASS |
-| PostgreSQL killed, 60 s | 35,688 | 0 | 0 | 36s | PASS |
-| bridge SIGKILL, 30 s | 34,109 | 0 | 0 | 0s | PASS |
-| ingest SIGKILL, 30 s | 35,205 | 0 | 0 | 0s | PASS |
-| agent SIGKILL (all 2,000 at once) | 23,234 | 0 | 0 | 0s | PASS |
+| network cut, 60 s | 50,034 | 0 | 0 | 1m16s | PASS |
+| network degraded (300 ± 200 ms and 512 KB/s both ways, 5% resets), 120 s | 52,610 | 0 | 0 | 6s | PASS |
+| Mosquitto restart | 28,559 | 0 | 0 | 26s | PASS |
+| one Kafka broker killed, 60 s | 40,552 | 0 | 0 | 6s | PASS |
+| all Kafka brokers stopped, 60 s | 47,208 | 0 | 0 | 57s | PASS |
+| PostgreSQL killed, 60 s | 41,728 | 0 | 0 | 36s | PASS |
+| bridge SIGKILL, 30 s | 34,601 | 0 | 0 | 28s | PASS |
+| ingest SIGKILL, 30 s | 34,626 | 0 | 0 | 26s | PASS |
+| agent SIGKILL (all 2,000 at once) | 28,240 | 0 | 0 | 29s | PASS |
 
 **10,000 devices**, one reading every 10 s each (1,000 readings/s), device
-state on tmpfs (see Limitations):
+state on tmpfs (see Limitations,
+[table](docs/results/2026-11-23T164507Z-8ffb129828b1.md)):
 
 | Scenario | Readings | Missing | Duplicates | Recovery | Result |
 |---|---:|---:|---:|---:|---|
-| network cut, 60 s | 482,255 | 0 | 0 | 4m48s | PASS |
-| network degraded, 120 s | 647,059 | 0 | 0 | 6m40s | PASS |
-| Mosquitto restart | 411,034 | 0 | 0 | 4m33s | PASS |
-| one Kafka broker killed, 60 s | 681,276 | 0 | 0 | 8m17s | PASS |
-| all Kafka brokers stopped, 60 s | 794,433 | 0 | 0 | > 10m | PASS |
-| PostgreSQL killed, 60 s | 792,362 | 0 | 0 | > 10m | PASS |
-| bridge SIGKILL, 30 s | 590,336 | 0 | 0 | 7m2s | PASS |
-| ingest SIGKILL, 30 s | 765,866 | 0 | 0 | > 10m | PASS |
-| agent SIGKILL (all 10,000 at once) | 280,421 | 0 | 0 | 3m2s | PASS |
+| network cut, 60 s | 805,536 | 0 | 0 | > 10m | PASS |
+| network degraded, 120 s | 843,254 | 0 | 0 | > 10m | PASS |
+| Mosquitto restart | 730,269 | 0 | 0 | > 10m | PASS |
+| one Kafka broker killed, 60 s | 781,093 | 0 | 0 | > 10m | PASS |
+| all Kafka brokers stopped, 60 s | 797,762 | 0 | 0 | > 10m | PASS |
+| PostgreSQL killed, 60 s | 787,799 | 0 | 0 | > 10m | PASS |
+| bridge SIGKILL, 30 s | 751,169 | 0 | 0 | > 10m | PASS |
+| ingest SIGKILL, 30 s | 751,241 | 0 | 0 | > 10m | PASS |
+| agent SIGKILL (all 10,000 at once) | 698,046 | 0 | 0 | > 10m | PASS |
 
-Every reading was stored exactly once, but not on time. The VM was
-saturated (load average about 90, 4 GB in swap): in the steady minute
-before each fault ingest stored 870 to 990 readings/s, a backlog of about
-20,000 records from the ramp-up never cleared, and the p99 delay was about
-30 s. Recovery, measured as "p99 under 5 s again", took minutes; "> 10m"
-means the runner stopped waiting.
+Every reading was stored exactly once, but not on time. The host was
+saturated (load average 100 to 115 on its 4 vCPUs through the suite), and
+no scenario met the recovery rule within the runner's 10-minute wait
+("> 10m"). The rate is not the limit: the throughput search below kept up
+with 2,000 batches/s from 2,000 devices. The cost is in the number of
+devices, each with its own TLS connection, local log and state file, all
+on the same 4 vCPUs as the stack.
 
-**Power loss**: 10 hard resets (QMP `system_reset`) of a VM running the
-agent snap, at random moments, with a collection every 200 ms (11
-readings from the built-in collectors, about 55 readings/s) and
-`wal.sync=interval`: 9,089 readings, all acknowledged, 0 missing,
-0 duplicates. The VM ran Ubuntu Server 24.04, not Ubuntu Core (see
-Limitations).
+**Power loss on Ubuntu Core 24**: 10 hard resets (QMP `system_reset`) of
+an Ubuntu Core 24 VM (Canonical's signed `ubuntu-core-24-amd64` model)
+running the strict agent snap as `snap_daemon`, at random moments, with a
+collection every 200 ms (11 readings from the built-in collectors, about
+55 readings/s) and `wal.sync=interval`: 6,293 readings, all acknowledged,
+0 missing, 0 duplicates
+([table](docs/results/2026-11-23T195718Z-b0047ec26411-poweroff.md)). The
+same device had first been refreshed from v0.1.1, which moved its state to
+`$SNAP_DATA/state` without losing a reading.
 
 | Target | Measured |
 |---|---|
-| Correctness: 0 missing, 0 duplicates in every failure scenario | Met: 9 of 9 at 2,000 devices, 9 of 9 at 10,000, and 10 power cuts |
-| Scale: 10,000 devices, one reading every 10 s, on one dev VM | All 10,000 ran and every reading was stored once, with the devices' state on tmpfs; with it on the database's disk, ingest stored about 770 of 1,000 readings/s |
-| Latency: p99 from collection to commit under 5 s at normal load | Met at 2,000 devices: p99 2.49 s, p50 2.20 s over 6 steady minutes, most of it the agent's own 1 s batch wait and 1 s fsync interval. Not met at 10,000: about 30 s |
-| Throughput: highest rate before the lag keeps growing | 1,000 batches/s of one reading (p99 2.5 s); at 1,500/s the lag crept up. In batches of 64, 32,000 readings/s ([table](docs/results/2026-11-10T044759Z-add94424b241-throughput.md)) |
-| Agent: under 30 MB RSS, binary under 20 MB | 19.7 to 21.9 MB RSS (the snap daemon, and an agent with six collectors over 12 minutes); binary 16.2 MB, snap 5.2 MB |
+| Correctness: 0 missing, 0 duplicates in every failure scenario | Met: 9 of 9 at 2,000 devices, 9 of 9 at 10,000, and 10 power cuts on Ubuntu Core 24 |
+| Scale: 10,000 devices, one reading every 10 s, on one dev VM | All 10,000 ran and every reading was stored once, with the devices' state on tmpfs; on time only up to fewer devices (see above) |
+| Latency: p99 from collection to commit under 5 s at normal load | Met: p99 2.49 s from 250 to 1,500 batches/s in the throughput search, most of it the agent's own 1 s batch wait and 1 s fsync interval; 4.48 s at 2,000/s. Not met at 10,000 devices on this host |
+| Throughput: highest rate before the lag keeps growing | At least 2,000 batches/s of one reading, the highest step tried; in batches of 64, 32,000 readings/s ([table](docs/results/2026-11-23T185446Z-8ffb129828b1-throughput.md)) |
+| Agent: under 30 MB RSS, binary under 20 MB | 16.9 to 19.3 MB RSS (the snap daemon on Ubuntu Core 24, first 7 minutes); binary 16.3 MB, snap 5.2 MB |
 
 ## Quick start
 
@@ -159,20 +162,21 @@ how to check the signatures.
 
 ## Limitations
 
-- **10,000 devices are more than the test VM serves on time.** Every
+- **10,000 devices are more than the test host serves on time.** Every
   reading was stored once, but with the load generator, the stack and the
-  observability tools on 4 vCPUs and 8 GB, the p99 delay was about 30 s.
-  Even that needs the devices' state on tmpfs: each simulated device fsyncs
-  its local log and state file, as a real device does on its own disk, and
-  on one VM those fsyncs, about 3,000 a second, share the disk with
-  PostgreSQL's commits. With the state on disk, ingest stored about 770 of
-  the 1,000 readings/s offered. The tmpfs runs do not test power loss; the
+  observability tools on 4 vCPUs, no failure scenario got back to a p99
+  under 5 s within 10 minutes. Even that needs the devices' state on tmpfs:
+  each simulated device fsyncs its local log and state file, as a real
+  device does on its own disk, and on one machine those fsyncs, about 3,000
+  a second, share the disk with PostgreSQL's commits. On the earlier
+  UpCloud test VM, with the state on disk, ingest stored about 770 of the
+  1,000 readings/s offered. The tmpfs runs do not test power loss; the
   power-off test does.
-- **The power-off test ran on Ubuntu Server 24.04, not Ubuntu Core.**
-  Ubuntu Core's first boot needs an Ubuntu One account, so it could not be
-  automated. The agent ran as the same strict snap on a real kernel and
-  ext4, under QEMU without KVM; Ubuntu Core's own boot and partition layout
-  were not tested.
+- **Ubuntu Core ran under QEMU without KVM.** The power-off test used a
+  real Ubuntu Core 24 image, but under software emulation on a cloud host
+  without `/dev/kvm`, not on device hardware. Core's first boot needs an
+  Ubuntu One account, so that one step (console-conf) was done by hand;
+  the install, enrollment and resets are scripted.
 - **The agent snap is not in the Snap Store.** Build it with `make snap`
   and install it with `--dangerous`. Each release also attaches the amd64
   and arm64 snaps and their SBOMs, which the signed `checksums.txt` covers.

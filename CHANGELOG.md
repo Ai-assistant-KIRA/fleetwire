@@ -85,12 +85,17 @@ the new services.
   capabilities instead of root, and `sudo fleetwire-agent` runs as that
   user too. The identity and local log move from `$SNAP_DATA` to
   `$SNAP_DATA/state`; the install and post-refresh hooks create or migrate
-  it, and the daemon repairs it before every start. A revert to 0.1.1 runs
+  it, and the daemon repairs it before every start. The command chain drops
+  to the user with the new `fleetwire-agent drop-privileges`, which works
+  on the snapd 2.63 that Ubuntu Core 24 ships, where `setpriv` is denied. A revert to 0.1.1 runs
   on that revision's copy of the data; the Ubuntu Core how-to gives the
   procedure that loses nothing.
 - In the snap, `fleetwire-agent status` needs sudo to read the files while
   the daemon is stopped, `metrics.listen` can no longer use a port below
   1024, and a rewritten `state.json` must belong to `snap_daemon`.
+- The README's results come from new runs with the post-fault recovery
+  method on an EC2 host, and the power-off test ran on Ubuntu Core 24:
+  10 hard resets, 6,293 readings, 0 missing, 0 duplicates.
 - Retention deletes an export 30 days after it expires, or 30 days after it
   was created if it failed; `GET /v1/exports/{id}` then answers 404.
 - The bundle pins `postgresql-k8s` revision 957 (`16/stable`) and
