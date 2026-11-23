@@ -121,6 +121,19 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	return serve(ctx, cfg, stderr)
 }
 
+// traceFlushLimit bounds the trace exporter's flush at exit: an
+// unreachable collector must not hold up the exit.
+const traceFlushLimit = 5 * time.Second
+
+// flushTraces stops the trace exporter within limit. It runs after
+// everything else has stopped, when ctx has usually ended already, so it
+// is detached from ctx: the spans of the shutdown itself are still sent.
+func flushTraces(ctx context.Context, shutdown func(context.Context) error, limit time.Duration) error {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
+	defer cancel()
+	return shutdown(sctx)
+}
+
 func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	log, err := telemetry.NewLogger(logOut, "fleetwire-api", cfg.LogLevel)
 	if err != nil {
@@ -131,12 +144,7 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		// An unreachable collector must not hold up the exit.
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		defer cancel()
-		_ = shutdownTracing(sctx)
-	}()
+	defer func() { _ = flushTraces(ctx, shutdownTracing, traceFlushLimit) }()
 	reg := telemetry.NewRegistry("fleetwire-api")
 
 	db, err := store.Connect(ctx, cfg.DatabaseURL, store.Options{
@@ -237,16 +245,13 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 		defer cancel()
 		return admin.Shutdown(sctx)
 	})
-	// The CRL publisher stops only after the API listeners have drained:
-	// a revocation by a request that is still running must reach the CRL.
-	crlCtx, stopCRL := context.WithCancel(context.WithoutCancel(gctx))
-	defer stopCRL()
-	g.Go(func() error { pub.Run(crlCtx, cfg.CRLInterval); return nil })
 	g.Go(func() error { keys.Run(gctx); return nil })
 	g.Go(func() error { return worker.Run(gctx) })
 	g.Go(func() error {
-		defer stopCRL()
-		return srv.Serve(gctx)
+		// The CRL publisher stops only after the API listeners have
+		// drained: a revocation by a request that is still running must
+		// reach the CRL.
+		return srv.Serve(gctx, func(ctx context.Context) { pub.Run(ctx, cfg.CRLInterval) })
 	})
 	if internal != nil {
 		g.Go(func() error {

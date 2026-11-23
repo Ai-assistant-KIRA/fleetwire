@@ -206,8 +206,16 @@ func (s *Server) httpServer(h http.Handler, tlsCfg *tls.Config) *http.Server {
 	}
 }
 
+// drainTimeout is how long each listener gets at shutdown to finish the
+// requests it is serving.
+const drainTimeout = 30 * time.Second
+
 // Serve runs both listeners until ctx ends, then shuts down gracefully.
-func (s *Server) Serve(ctx context.Context) error {
+// untilDrained run until both listeners have drained, as the token use
+// recorder does, so work a request still running at shutdown hands over to
+// them is still done: the API passes the CRL publisher, which must publish
+// a revocation made by such a request. Serve returns once they stopped.
+func (s *Server) Serve(ctx context.Context, untilDrained ...func(context.Context)) error {
 	var lc net.ListenConfig
 	pubLn, err := lc.Listen(ctx, "tcp", s.cfg.PublicAddr)
 	if err != nil {
@@ -221,37 +229,46 @@ func (s *Server) Serve(ctx context.Context) error {
 	pub := s.httpServer(s.PublicHandler(), s.cfg.PublicTLS)
 	dev := s.httpServer(s.DeviceHandler(), s.cfg.DeviceTLS)
 	s.log.Info("api listening", "public", pubLn.Addr().String(), "device", devLn.Addr().String())
+	return serve(ctx, []listener{{pub, pubLn}, {dev, devLn}}, drainTimeout,
+		append([]func(context.Context){s.runTouches}, untilDrained...))
+}
 
+type listener struct {
+	srv *http.Server
+	ln  net.Listener
+}
+
+// serve runs the listeners and untilDrained until ctx ends. Then it drains
+// every listener at the same time, each with the whole drain budget (one
+// after the other, the second got what the first left), and only then
+// stops untilDrained.
+func serve(ctx context.Context, listeners []listener, drain time.Duration, untilDrained []func(context.Context)) error {
 	g, gctx := errgroup.WithContext(ctx)
-	// Token use is recorded until both listeners have drained, so the
-	// requests still running at shutdown are not dropped from it.
-	touchCtx, stopTouches := context.WithCancel(context.WithoutCancel(ctx))
-	defer stopTouches()
-	g.Go(func() error { s.runTouches(touchCtx); return nil })
-	for _, p := range []struct {
-		srv *http.Server
-		ln  net.Listener
-	}{{pub, pubLn}, {dev, devLn}} {
+	bgCtx, stopBackground := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopBackground()
+	for _, run := range untilDrained {
+		g.Go(func() error { run(bgCtx); return nil })
+	}
+	for _, l := range listeners {
 		g.Go(func() error {
-			if err := p.srv.ServeTLS(p.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				return fmt.Errorf("serve %s: %w", p.ln.Addr(), err)
+			if err := l.srv.ServeTLS(l.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve %s: %w", l.ln.Addr(), err)
 			}
 			return nil
 		})
 	}
 	g.Go(func() error {
 		<-gctx.Done()
-		defer stopTouches()
-		// The listeners drain at the same time, so each has the whole
-		// budget; one after the other, the second got what the first left.
-		sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), 30*time.Second)
+		defer stopBackground()
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(gctx), drain)
 		defer cancel()
-		var pubErr, devErr error
+		errs := make([]error, len(listeners))
 		var wg sync.WaitGroup
-		wg.Go(func() { pubErr = pub.Shutdown(sctx) })
-		wg.Go(func() { devErr = dev.Shutdown(sctx) })
+		for i, l := range listeners {
+			wg.Go(func() { errs[i] = l.srv.Shutdown(sctx) })
+		}
 		wg.Wait()
-		return errors.Join(pubErr, devErr)
+		return errors.Join(errs...)
 	})
 	return g.Wait()
 }
