@@ -35,6 +35,11 @@ the new services.
   bundle integration test, scans the service images with Grype and builds a
   GoReleaser snapshot.
 
+- COS Lite integration for the charms: the api, ingest and bridge charms
+  provide `metrics-endpoint` with the fleetwire alert rules split per
+  service, the api charm provides `grafana-dashboard`, and all four forward
+  their workload logs to Loki over `logging` (Juju 3.4 or later). The
+  integration test checks all of it when `FLEETWIRE_COS=1` is set.
 ### Changed
 
 - The charms write the database URLs and the Kafka password to 0600 files
@@ -74,6 +79,21 @@ the new services.
   job scopes, job and token pruning, and export limits, and the docs and
   code comments no longer cite planning files outside the repository.
 
+- The agent snap's daemon runs as the `snap_daemon` user with no
+  capabilities instead of root, and `sudo fleetwire-agent` runs as that
+  user too. The identity and local log move from `$SNAP_DATA` to
+  `$SNAP_DATA/state`; the install and post-refresh hooks create or migrate
+  it, and the daemon repairs it before every start. A revert to 0.1.1 runs
+  on that revision's copy of the data; the Ubuntu Core how-to gives the
+  procedure that loses nothing.
+- In the snap, `fleetwire-agent status` needs sudo to read the files while
+  the daemon is stopped, `metrics.listen` can no longer use a port below
+  1024, and a rewritten `state.json` must belong to `snap_daemon`.
+- Retention deletes an export 30 days after it expires, or 30 days after it
+  was created if it failed; `GET /v1/exports/{id}` then answers 404.
+- The bundle pins `postgresql-k8s` revision 957 (`16/stable`) and
+  `kafka-k8s` revision 111 (`4/stable`), and the charms pin every Python
+  dependency with `charm-strict-dependencies`.
 ### Fixed
 
 - The agent's uplink no longer wakes every millisecond while it is
@@ -92,8 +112,7 @@ the new services.
   one device sends batches that fail.
 - A device's retained ack no longer moves back when two ack workers or two
   partition owners publish for the same device.
-- The data key manager forgets every cached key of a destroyed tenant and
-  keeps keyring calls out of database transactions.
+- The data key manager keeps keyring calls out of database transactions.
 - A running export can no longer leave decrypted files behind a tenant
   destroy, each export attempt writes its own temp file, and failed exports
   show as failed instead of running.
@@ -151,6 +170,13 @@ the new services.
   note the keyring listener in ADR-0011. The OpenAPI description carries
   version 0.1.1 and declares mutual TLS for `POST /v1/renew`.
 
+- The agent snap no longer causes an AppArmor denial for
+  `/proc/<pid>/net/netstat` on every metrics scrape; it leaves out the two
+  process network counters, which the snap could never read.
+- An export attempt that stalled past its lease during a tenant destroy can
+  no longer recreate the tenant's export directory.
+- Token use still queued when the API stops is recorded, and a revocation
+  triggered just before the CRL publisher stops is published.
 ### Security
 
 - Each client network (IPv4 address or IPv6 /64) gets a budget of failed
@@ -186,7 +212,10 @@ the new services.
 - The release workflow pins cosign, syft and GoReleaser, publishes only a
   commit that passes CI and the end-to-end test, and the Dockerfiles pin
   their base images by digest.
-
+- A destroyed tenant's unwrapped data keys leave the memory of every
+  process within 5.5 minutes of its KEK being destroyed: the API drops them
+  at once, ingest at the tenant's next batch, and a sweep every 30 s
+  removes expired keys.
 ## [0.1.1] - 2026-11-22
 
 ### Fixed
