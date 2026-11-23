@@ -194,3 +194,30 @@ func TestRunPublishesAtStartAndOnTrigger(t *testing.T) {
 	e.pub.Trigger()
 	waitFor("the CRL with the new revocation", func(s map[string]bool) bool { return s[serial] })
 }
+
+// TestRunPublishesATriggerPendingWhenItStops: a revocation triggered just
+// before Run is stopped, as by the last request before the API shuts down,
+// is in the CRL when Run returns.
+func TestRunPublishesATriggerPendingWhenItStops(t *testing.T) {
+	e := newEnv(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		e.pub.Run(ctx, time.Hour)
+	}()
+	deadline := time.Now().Add(20 * time.Second)
+	for e.pub.Latest() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("no first CRL")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	serial := e.cert(uuid.New(), time.Now().Add(time.Hour), true)
+	e.pub.Trigger()
+	cancel()
+	<-done
+	if serials, _ := e.parse(e.pub.Latest()); !serials[serial] {
+		t.Fatal("the revocation triggered before Run stopped is not in the CRL")
+	}
+}

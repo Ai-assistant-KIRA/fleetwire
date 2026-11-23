@@ -138,23 +138,50 @@ func (p *Publisher) Age() time.Duration {
 	return time.Since(time.Unix(0, last))
 }
 
+// finalPublishLimit bounds the publish Run still makes after ctx ended.
+const finalPublishLimit = 5 * time.Second
+
 // Run publishes at start, on Trigger, and every interval, until ctx ends.
-// Failures are retried every minute.
+// Failures are retried every minute. A Trigger not acted on when ctx ends,
+// or whose publish ctx cut off, is still published, within
+// finalPublishLimit: the API stops Run once its listeners have drained,
+// and the last request may have revoked a device.
 func (p *Publisher) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTimer(0)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
+			p.publishPending(context.WithoutCancel(ctx))
 			return
 		case <-t.C:
 		case <-p.trigger:
 		}
 		next := interval
 		if err := p.Publish(ctx); err != nil {
+			if ctx.Err() != nil {
+				// Stopped mid-publish: publish once more on the way out.
+				p.Trigger()
+				p.publishPending(context.WithoutCancel(ctx))
+				return
+			}
 			p.log.Error("crl publish failed", "err", err)
 			next = time.Minute
 		}
 		t.Reset(next)
+	}
+}
+
+// publishPending publishes if a Trigger is waiting.
+func (p *Publisher) publishPending(ctx context.Context) {
+	select {
+	case <-p.trigger:
+	default:
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, finalPublishLimit)
+	defer cancel()
+	if err := p.Publish(ctx); err != nil {
+		p.log.Error("crl publish at shutdown failed; the next start publishes it", "err", err)
 	}
 }
