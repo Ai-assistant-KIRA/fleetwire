@@ -1,9 +1,10 @@
 #!/bin/sh
 # Command chain of both apps. snapd starts the daemon as root, and sudo
 # runs the fleetwire-agent command as root; both continue here as the
-# snap_daemon system user (uid and gid 584788 on every system), so no
-# process that reads or writes $SNAP_DATA/state runs as root, and none
-# leaves a root-owned file there that the daemon could not open.
+# snap_daemon system user (uid and gid 584788 on every system). Apart from
+# prepare-state, which only creates, moves and hands over, no process of
+# the snap reads or writes $SNAP_DATA/state as root, so none leaves a
+# root-owned file there that the daemon could not open.
 #
 # setpriv is the one in the core24 base. --clear-groups empties the
 # supplementary groups with setgroups(0, NULL), the form snapd's seccomp
