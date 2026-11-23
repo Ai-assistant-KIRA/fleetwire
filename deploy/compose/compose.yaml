@@ -138,7 +138,7 @@ services:
 
   mosquitto:
     <<: *hardened
-    image: eclipse-mosquitto:2.1.2-alpine
+    image: eclipse-mosquitto:2.1.4-alpine
     restart: unless-stopped
     networks: [fleetwire]
     user: "${FW_UID:-1883}:${FW_GID:-1883}"
