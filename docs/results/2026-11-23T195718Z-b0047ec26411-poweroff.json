@@ -1,0 +1,11 @@
+{
+  "devices": 1,
+  "readings": 6293,
+  "stored": 6293,
+  "missing": 0,
+  "duplicates": 0,
+  "gap_seqs": 0,
+  "beyond_last_seq": 0,
+  "unrecorded_gap_seqs": 0,
+  "errors": 0
+}
