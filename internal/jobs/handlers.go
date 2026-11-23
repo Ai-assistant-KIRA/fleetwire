@@ -209,11 +209,20 @@ const (
 // An export does not start once its tenant is no longer active, and one
 // that started before gives up when it finishes (finishExport). A tenant
 // destroy waits for those before it removes the tenant's export directory.
+//
+// The tenant's export directory is made only in the transaction that holds
+// the tenant row FOR SHARE and finds the tenant active. A destroy marks the
+// tenant destroying before it removes the directory, and that waits for
+// the lock, so an attempt that stalled past its lease, while another
+// worker gave the export up and the destroy finished, cannot make the
+// directory again: its temp file then has no directory to go in.
 func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) {
 	var exp store.Export
 	var skip string
+	dir := filepath.Join(w.cfg.ExportDir, tenant.String())
+	made := false
 	err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
-		t, err := tx.GetTenant(ctx)
+		t, err := tx.ShareLockTenant(ctx)
 		if err != nil {
 			return err
 		}
@@ -229,11 +238,22 @@ func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) 
 			skip = skipTenantGone
 			return tx.FailExport(ctx, id, skipTenantGone)
 		case exp.Status == store.ExportPending:
-			return tx.SetExportRunning(ctx, id)
+			if err := tx.SetExportRunning(ctx, id); err != nil {
+				return err
+			}
+		case exp.Status != store.ExportRunning:
+			return nil
 		}
-		return nil
+		made, err = makeDir(dir)
+		return err
 	})
 	if err != nil {
+		if made {
+			// The lock may have ended with the session before the directory
+			// was made, so a destroy may have run since. An empty directory
+			// is made again by the next attempt.
+			_ = os.Remove(dir)
+		}
 		return nil, err
 	}
 	if skip != "" {
@@ -243,11 +263,10 @@ func (w *Worker) export(ctx context.Context, tenant, id uuid.UUID) (any, error) 
 		// Ready, expired or failed: there is nothing left to do.
 		return exportResult{}, nil
 	}
-
-	dir := filepath.Join(w.cfg.ExportDir, tenant.String())
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, fmt.Errorf("export dir: %w", err)
+	if w.exportStarted != nil {
+		w.exportStarted()
 	}
+
 	final := filepath.Join(dir, id.String()+".ndjson.gz")
 	// Each attempt writes its own temp file. Two attempts of one export can
 	// overlap, when a worker stalls past its lease and another one takes the
@@ -457,6 +476,22 @@ func (w *Worker) removeExportFile(path string) (bool, error) {
 	defer root.Close()
 	if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, fmt.Errorf("remove export file: %w", err)
+	}
+	return true, nil
+}
+
+// makeDir makes dir and any missing parent, and reports whether dir itself
+// was made by this call.
+func makeDir(dir string) (bool, error) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return false, fmt.Errorf("export dir: %w", err)
+	}
+	err := os.Mkdir(dir, 0o700)
+	if errors.Is(err, os.ErrExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("export dir: %w", err)
 	}
 	return true, nil
 }

@@ -357,6 +357,44 @@ func TestDestroyWaitsForARunningExport(t *testing.T) {
 	}
 }
 
+// TestStalledExportDoesNotRecreateTheExportDir: an export attempt stalls
+// past its lease once it has started. Meanwhile another worker takes the
+// job over and gives the export up, because the destroy has started, and
+// the destroy runs to the end. When the stalled attempt goes on, the
+// destroyed tenant's export directory must not come back.
+func TestStalledExportDoesNotRecreateTheExportDir(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	dev, _ := e.device(tenant)
+	e.readings(tenant, dev, 1, 10, time.Now())
+	exp, expJob := e.export(tenant)
+	var destroyJob uuid.UUID
+	e.w.exportStarted = func() {
+		e.w.exportStarted = nil
+		e.inTenant(tenant, func(ctx context.Context, tx *store.Tx) error {
+			return tx.SetTenantStatus(ctx, store.TenantDestroying)
+		})
+		e.asOwner(`UPDATE fleetwire.jobs SET status = 'succeeded', locked_by = 'elsewhere', locked_until = NULL,
+			finished_at = now() WHERE id = $1`, expJob)
+		e.asOwner(`UPDATE fleetwire.exports SET status = 'failed', error = $2 WHERE id = $1`, exp, skipTenantGone)
+		destroyJob = e.enqueue(tenant, store.JobTenantDestroy, map[string]any{"tenant_id": tenant}, "")
+		e.runJobs()
+	}
+	e.runJobs()
+	if destroyJob == uuid.Nil {
+		t.Fatal("the export attempt never started")
+	}
+	if j := e.job(tenant, destroyJob); j.Status != store.JobSucceeded {
+		t.Fatalf("destroy job %s: %s", j.Status, lastError(j))
+	}
+	if st := e.tenantStatus(tenant); st != store.TenantDestroyed {
+		t.Fatalf("tenant %s, want destroyed", st)
+	}
+	if _, err := os.Stat(filepath.Join(e.exportDir, tenant.String())); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the stalled attempt made the destroyed tenant's export directory again (%v)", err)
+	}
+}
+
 // TestExportDoesNotStartForADestroyingTenant: an export job that runs after
 // the destroy started fails its export and writes nothing.
 func TestExportDoesNotStartForADestroyingTenant(t *testing.T) {

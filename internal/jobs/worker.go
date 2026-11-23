@@ -63,6 +63,9 @@ type Worker struct {
 	now     func() time.Time
 	// handler runs one attempt of a job; tests replace it.
 	handler func(ctx context.Context, j store.Job) (any, error)
+	// exportStarted, when set, runs once an export attempt has checked the
+	// tenant and marked the export running; tests stall attempts there.
+	exportStarted func()
 }
 
 // NewWorker returns a worker.
