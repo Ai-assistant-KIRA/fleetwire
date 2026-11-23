@@ -28,8 +28,8 @@ apps:
   daemon:
     # snapd starts every daemon as root. The command chain first prepares
     # $SNAP_DATA/state as root (prepare-state), then continues as
-    # snap_daemon with no capabilities (drop-privileges); both scripts are
-    # in snap/local. The agent keeps its identity and local log in
+    # snap_daemon with no capabilities (drop-privileges, which calls
+    # `fleetwire-agent drop-privileges`); both scripts are in snap/local. The agent keeps its identity and local log in
     # $SNAP_DATA/state because the snap's AppArmor profile does not let
     # even root change the owner of $SNAP_DATA itself.
     command: bin/fleetwire-agent run

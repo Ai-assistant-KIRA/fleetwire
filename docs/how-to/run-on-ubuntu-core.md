@@ -46,7 +46,7 @@ Inside the guest, the host is `10.0.2.2`; the script sets `enroll.url` and
 
 snapd starts the daemon as root. Its command chain prepares the state
 directory, then runs the agent as the `snap_daemon` system user (uid and
-gid 584788) through `setpriv` from the core24 base, which leaves the
+gid 584788) with `fleetwire-agent drop-privileges`, which leaves the
 process no capabilities. `sudo fleetwire-agent ...` runs as `snap_daemon`
 too.
 
@@ -70,6 +70,12 @@ Without sudo, `fleetwire-agent status` asks the daemon on
 `127.0.0.1:9465`. When the daemon is stopped, the command reads the files,
 and only `snap_daemon` can: use `sudo fleetwire-agent status`. As the
 daemon is not root, a `metrics.listen` port below 1024 does not work.
+
+On snapd older than 2.72, which includes the 2.63 that Ubuntu Core 24
+ships, the kernel log shows one AppArmor denial for `/proc/<pid>/mountinfo`
+each time an agent process starts. The Go runtime reads that file to size
+`GOMAXPROCS` from the cgroup and uses the CPU count when it cannot; the
+denial is harmless, and snapd 2.72 allows the read.
 
 ## Refresh from v0.1.1
 

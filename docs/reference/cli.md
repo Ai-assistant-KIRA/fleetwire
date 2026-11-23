@@ -54,6 +54,7 @@ operator endpoints, `fwt_` the tenant's own.
 | `config docs` | print the configuration reference |
 | `status [-json]` | ask the daemon, or read the files read-only if it is not running |
 | `version` | print the version, commit and Go version |
+| `drop-privileges CMD...` | in the snap, as root: become `snap_daemon` with no supplementary groups or capabilities, then run CMD (the command chain of both apps runs it) |
 | `prepare-state` | in the snap, as root: create `$SNAP_DATA/state` for `snap_daemon`, moving the `identity/` and `wal/` of v0.1.1 into it (the install and post-refresh hooks and the daemon's start run it) |
 
 `status` reaches the daemon at `metrics.listen`, on loopback when that

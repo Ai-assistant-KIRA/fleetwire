@@ -134,6 +134,22 @@ func TestSnapStatusWithoutPermissionSuggestsSudo(t *testing.T) {
 	}
 }
 
+func TestDropPrivilegesNeedsRootAndACommand(t *testing.T) {
+	err := run(t.Context(), []string{"drop-privileges"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "needs a command") {
+		t.Fatalf("without a command: %v", err)
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root")
+	}
+	// As any other user it refuses rather than run the command unchanged:
+	// the command chain only calls it as root.
+	err = run(t.Context(), []string{"drop-privileges", "true"}, &bytes.Buffer{}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "must start as root") {
+		t.Fatalf("as uid %d: %v", os.Getuid(), err)
+	}
+}
+
 func TestPrepareStateRunsOnlyAsRootInTheSnap(t *testing.T) {
 	err := run(t.Context(), []string{"prepare-state"}, &bytes.Buffer{}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "only inside the snap") {

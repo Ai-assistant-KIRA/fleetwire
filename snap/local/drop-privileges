@@ -6,13 +6,13 @@
 # the snap reads or writes $SNAP_DATA/state as root, so none leaves a
 # root-owned file there that the daemon could not open.
 #
-# setpriv is the one in the core24 base. --clear-groups empties the
-# supplementary groups with setgroups(0, NULL), the form snapd's seccomp
-# filter allows. Changing every uid from 0 to another clears the
-# permitted, effective and ambient capabilities, so the command starts
-# with none.
+# The agent binary drops the privileges itself (`fleetwire-agent
+# drop-privileges`): it clears the supplementary groups, sets every gid and
+# uid to snap_daemon, and execs the command, which starts with no
+# capabilities. setpriv from the base would do the same, but snapd before
+# 2.68, which Ubuntu Core 24 ships, does not let a snap execute it.
 set -eu
 if [ "$(id -u)" -eq 0 ]; then
-  exec setpriv --reuid=584788 --regid=584788 --clear-groups -- "$@"
+  exec "$SNAP/bin/fleetwire-agent" drop-privileges "$@"
 fi
 exec "$@"

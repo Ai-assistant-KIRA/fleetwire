@@ -49,20 +49,29 @@ on snapd 2.78 and in its policy sources:
   untouched. The daemon's command chain runs it again before each start:
   after a revert, a snapshot restore or a deleted state directory no hook
   runs.
-- The daemon's command chain then runs `setpriv` from the core24 base. The
-  `fleetwire-agent` command uses the same chain when run with sudo, so
-  `status` can read the files and no command leaves a root-owned file the
-  daemon cannot open. The daemon refuses to run as root in the snap.
+- The daemon's command chain then drops to `snap_daemon` with
+  `fleetwire-agent drop-privileges`, which calls `setgroups(0, NULL)`,
+  `setresgid` and `setresuid` with every id set to 584788, checks the
+  result, and execs the daemon. The `fleetwire-agent` command uses the
+  same chain when run with sudo, so `status` can read the files and no
+  command leaves a root-owned file the daemon cannot open. The daemon
+  refuses to run as root in the snap.
 
 ## Alternatives considered
 
 - **Stay root.** Simplest, and what v0.1.1 did; it gives every parsing bug
   root's rights.
-- **Drop privileges inside the Go process** (`syscall.Setuid` after the
-  move). It works with the same seccomp rules, but the Go runtime and the
-  move would share one process that starts as root. `setpriv` at the exec
-  boundary is the documented path and leaves the agent's code unaware of
-  it, apart from the root check.
+- **`setpriv` from the core24 base**, the path snapd's documentation shows.
+  It worked on snapd 2.78, but snapd's default AppArmor template allows a
+  snap to execute `/usr/bin/setpriv` only from 2.68 on, and Ubuntu Core 24
+  ships snapd 2.63: on a real Ubuntu Core 24 device the daemon failed with
+  `exec: setpriv: Permission denied` and restarted every 5 s.
+  `drop-privileges` makes the same calls in a process of its own that
+  execs the daemon, so the daemon's code still never runs as root.
+- **Drop privileges in the daemon's own process** (`syscall.Setuid` after
+  the move). It works with the same seccomp rules, but the move, the Go
+  runtime's start-up and the daemon would share one process that starts
+  as root.
 - **Keep the state in `$SNAP_COMMON`.** snapd does not version it, so a
   revert would not rewind the log. But v0.1.1 reads `$SNAP_DATA`, a later
   refresh from a reverted v0.1.1 would find two states to reconcile, and

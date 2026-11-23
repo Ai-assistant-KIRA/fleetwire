@@ -6,6 +6,7 @@
 //	fleetwire-agent status [-json]  last seq, acked seq, gaps, certificate expiry
 //	fleetwire-agent version
 //	fleetwire-agent prepare-state   create or migrate $SNAP_DATA/state (snap hooks, as root)
+//	fleetwire-agent drop-privileges CMD...  become snap_daemon, then exec CMD (snap command chain)
 //
 // Inside the snap, configuration comes from `snapctl get -d` and state lives
 // in $SNAP_DATA/state, owned by the snap_daemon user the daemon runs as.
@@ -79,6 +80,10 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 			return errors.New("config needs a subcommand: check or docs")
 		}
 		cmd, args = "config "+args[0], args[1:]
+	}
+	if cmd == "drop-privileges" {
+		// Before flag parsing: everything after it is the command to run.
+		return dropPrivileges(args)
 	}
 	e := &env{inSnap: os.Getenv("SNAP") != "" && os.Getenv("SNAP_DATA") != ""}
 	fs := flag.NewFlagSet("fleetwire-agent "+cmd, flag.ContinueOnError)
