@@ -120,3 +120,34 @@ Measured with the load generator in the 10,000-device runs and recorded in
 `docs/results/`. Settings in place before the run: `nofile` 1,048,576 for
 all users, `fs.nr_open` 1,048,576, local port range 10240-65535, and
 Mosquitto `max_connections -1` with a matching container `ulimit`.
+
+## 8. COS Lite charm libraries
+
+Read in the library sources fetched with `charmcraft fetch-lib` (charmcraft
+4.5.0) on 2026-11-23, and checked on MicroK8s with `prometheus-k8s` 301,
+`grafana-k8s` 180 and `loki-k8s` 217 from `2/stable`:
+
+- Versions: `prometheus_k8s.v0.prometheus_scrape` 0.66,
+  `grafana_k8s.v0.grafana_dashboard` 0.54, `loki_k8s.v1.loki_push_api`
+  1.35. charmcraft warns that Charmhub-hosted libraries are deprecated in
+  favour of Python packages, but the charmlibs project publishes none for
+  these three. Their `PYDEPS` name `cosl` (1.11.3 here), which needs
+  pydantic and so the compiled `pydantic-core`.
+- `MetricsEndpointProvider`: a `*` target becomes the unit's bind address,
+  the pod IP on Kubernetes, in the same model and across models. The
+  consumer prefixes the job name with `juju_<model>_<uuid>_<application>`
+  and keeps the job's `relabel_configs`. The provider adds topology labels
+  to every rule and two generic rules, `HostDown` and `HostMetricsMissing`;
+  the Prometheus charm then adds `juju_model`, `juju_model_uuid` and
+  `juju_application` matchers to each expression, including those inside
+  `absent()`.
+- `GrafanaDashboardProvider`: replaces a dashboard uid that is not a
+  40-character "Path40" uid with one derived from the charm name and file
+  path, and adds a `charm: <name>` tag. Grafana adds the Juju topology
+  variables to every query and points Prometheus panels at its own data
+  source.
+- `LogForwarder`: adds a Pebble layer `<container>-log-forwarding` with one
+  Loki target per Loki unit and disables a target (`services: [-all]`) when
+  its unit leaves. It needs Juju 3.4. Pebble also sends the lines still in
+  each service's log buffer, so startup lines logged before the relation
+  arrived reach Loki.

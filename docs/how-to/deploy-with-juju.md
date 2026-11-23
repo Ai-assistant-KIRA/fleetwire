@@ -226,8 +226,67 @@ $ microk8s kubectl -n fleetwire port-forward svc/mosquitto-k8s 18883:8883 &
 ```
 
 The admin listeners (9090: plain HTTP health and metrics) are on no
-service. Scrape them from the pods, for example by pod name through the
-headless `<application>-endpoints` service Juju creates.
+service. COS Lite scrapes them at the pod addresses (next section); another
+Prometheus can scrape them by pod name through the headless
+`<application>-endpoints` service Juju creates.
+
+## 7. Observability with COS Lite
+
+The charms integrate with [COS Lite](https://documentation.ubuntu.com/observability/),
+Canonical's observability stack of Prometheus, Grafana and Loki charms:
+
+| Endpoint | Interface | Charms | What COS gets |
+|---|---|---|---|
+| `metrics-endpoint` | `prometheus_scrape` | API, ingest, bridge | A scrape job for the admin listener (9090, `/metrics`) of every unit, and the alert rules |
+| `grafana-dashboard` | `grafana_dashboard` | API | The fleetwire dashboard |
+| `logging` | `loki_push_api` | all four | The workload's output, sent by Pebble log forwarding |
+
+Mosquitto serves no Prometheus metrics, so `mosquitto-k8s` sends logs only.
+
+Prometheus scrapes each unit at its pod address. COS names the scrape jobs
+after the model and the application, so the charms set the `job` label back
+to `fleetwire-api`, `fleetwire-ingest` and `fleetwire-bridge`, the names the
+alert rules select on in the Compose stack too. The Prometheus charm also
+restricts every expression in a charm's rules to that charm's application.
+Each charm therefore carries only the rules on its own metrics, plus the
+liveness rules, and its `FleetwireServiceDown` keeps only the `absent()`
+term of its own job. The dashboard comes from the API charm alone, so
+Grafana lists it once. Its device panels stay empty, because devices are
+not scrape targets.
+
+`deploy/prometheus/rules` and `deploy/grafana/dashboards` stay the sources.
+`charms/cos_files.py` writes the charms' copies, and the charms' unit tests
+fail when a copy differs from what it would write. After changing a rule or
+the dashboard, run it and commit the copies:
+
+```console
+$ charms/cos_files.py
+```
+
+COS Lite usually runs in a model of its own, deployed as its documentation
+describes. Offer the three endpoints there, then integrate the fleetwire
+charms with the offers:
+
+```console
+$ juju offer cos.prometheus:metrics-endpoint prometheus-scrape
+$ juju offer cos.grafana:grafana-dashboard grafana-dashboards
+$ juju offer cos.loki:logging loki-logging
+$ juju switch fleetwire
+$ for app in fleetwire-api-k8s fleetwire-ingest-k8s fleetwire-bridge-k8s; do
+    juju integrate $app:metrics-endpoint admin/cos.prometheus-scrape; done
+$ juju integrate fleetwire-api-k8s:grafana-dashboard admin/cos.grafana-dashboards
+$ for app in fleetwire-api-k8s fleetwire-ingest-k8s fleetwire-bridge-k8s mosquitto-k8s; do
+    juju integrate $app:logging admin/cos.loki-logging; done
+```
+
+Prometheus must reach the pod addresses, so the COS model has to be on the
+same Kubernetes cluster. With Prometheus, Grafana and Loki in the fleetwire
+model itself, integrate the same endpoints with the applications directly,
+for example
+`juju integrate fleetwire-api-k8s:metrics-endpoint prometheus-k8s:metrics-endpoint`,
+and give Grafana its data sources with
+`juju integrate grafana-k8s:grafana-source prometheus-k8s:grafana-source`
+(and the same for `loki-k8s`). Log forwarding needs Juju 3.4 or later.
 
 ## Limits of this deployment
 
@@ -259,3 +318,10 @@ is stored:
 ```console
 $ cd charms && FLEETWIRE_IMAGES='localhost:32000/fleetwire-{service}:<commit>' tox -e integration
 ```
+
+With `FLEETWIRE_COS=1` it also deploys `prometheus-k8s`, `grafana-k8s` and
+`loki-k8s` from `2/stable` into that model, integrates them as above, and
+checks that Prometheus scrapes the three services (`up` is 1) and has loaded
+their alert rules, that Grafana has the fleetwire dashboard, and that Loki
+has logs from all four workloads. That adds about five minutes and under
+1 GiB of memory.
