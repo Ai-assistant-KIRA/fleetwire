@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: fleetwire API
-  version: 0.1.1
+  version: 0.2.0
   summary: Tenant, operator and device API of fleetwire.
   description: |
     Every error is an RFC 9457 problem (application/problem+json) with a

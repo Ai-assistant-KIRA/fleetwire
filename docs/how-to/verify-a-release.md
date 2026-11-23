@@ -10,7 +10,7 @@ You need cosign 3 or later.
 ## Binaries
 
 ```console
-$ VERSION=v0.1.0
+$ VERSION=v0.2.0
 $ BASE=https://github.com/Ai-assistant-KIRA/fleetwire/releases/download/$VERSION
 $ curl -fLO "$BASE/checksums.txt" -fLO "$BASE/checksums.txt.sigstore.json"
 $ cosign verify-blob \

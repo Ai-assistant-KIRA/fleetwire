@@ -34,12 +34,12 @@ applications:
     charm: ./fleetwire-api-k8s/fleetwire-api-k8s_amd64.charm
     scale: 1
     resources:
-      api-image: ghcr.io/ai-assistant-kira/fleetwire-api:0.1.1
+      api-image: ghcr.io/ai-assistant-kira/fleetwire-api:0.2.0
   fleetwire-ingest-k8s:
     charm: ./fleetwire-ingest-k8s/fleetwire-ingest-k8s_amd64.charm
     scale: 1
     resources:
-      ingest-image: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.1.1
+      ingest-image: ghcr.io/ai-assistant-kira/fleetwire-ingest:0.2.0
     options:
       # A one-broker Kafka cannot hold three replicas.
       kafka-replication: 1
@@ -47,7 +47,7 @@ applications:
     charm: ./fleetwire-bridge-k8s/fleetwire-bridge-k8s_amd64.charm
     scale: 1
     resources:
-      bridge-image: ghcr.io/ai-assistant-kira/fleetwire-bridge:0.1.1
+      bridge-image: ghcr.io/ai-assistant-kira/fleetwire-bridge:0.2.0
   mosquitto-k8s:
     charm: ./mosquitto-k8s/mosquitto-k8s_amd64.charm
     scale: 1

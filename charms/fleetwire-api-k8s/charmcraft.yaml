@@ -46,7 +46,7 @@ resources:
   api-image:
     type: oci-image
     description: OCI image with fleetwire-api at /usr/local/bin/service.
-    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-api:0.1.1
+    upstream-source: ghcr.io/ai-assistant-kira/fleetwire-api:0.2.0
 
 storage:
   data:

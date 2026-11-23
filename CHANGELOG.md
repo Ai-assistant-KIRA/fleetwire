@@ -6,6 +6,8 @@ uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 This release adds database migrations 00005 to 00008. The API charm and
 `make up` run them; elsewhere, run `fleetwire-api migrate` before starting
 the new services.
@@ -67,7 +69,7 @@ the new services.
   default, names refuse control characters, and an empty chunked body counts
   as no body.
 - The charms are built for arm64 as well as amd64, and the bundle and charms
-  point at the 0.1.1 images. A tag release fails when they name another
+  point at the 0.2.0 images. A tag release fails when they name another
   version.
 - Bump github.com/jackc/pgx/v5 to 5.13.0, github.com/pressly/goose/v3 to
   3.30.1, github.com/twmb/franz-go to 1.22.3, golang.org/x/time to 0.16.0,
@@ -168,7 +170,7 @@ the new services.
   power-off test, no longer claim ingest kept up with 10,000 devices on
   tmpfs, say where an enrollment refusal shows up, list every metric, and
   note the keyring listener in ADR-0011. The OpenAPI description carries
-  version 0.1.1 and declares mutual TLS for `POST /v1/renew`.
+  version 0.2.0 and declares mutual TLS for `POST /v1/renew`.
 
 - The agent snap no longer causes an AppArmor denial for
   `/proc/<pid>/net/netstat` on every metrics scrape; it leaves out the two
@@ -267,6 +269,7 @@ The first release.
 - CI with pinned actions, release builds with GoReleaser, SPDX SBOMs and
   cosign keyless signatures, and Sphinx documentation in the Diátaxis layout.
 
-[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ai-assistant-KIRA/fleetwire/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ai-assistant-KIRA/fleetwire/releases/tag/v0.1.0
