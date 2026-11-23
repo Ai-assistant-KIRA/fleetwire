@@ -48,6 +48,15 @@ requires:
   mqtt:
     interface: fleetwire_mqtt
     limit: 1
+  # COS Lite: Pebble forwards the service's output to Loki.
+  logging:
+    interface: loki_push_api
+
+provides:
+  # COS Lite: Prometheus scrapes the admin listener (9090, /metrics) on the
+  # pod and loads the alert rules.
+  metrics-endpoint:
+    interface: prometheus_scrape
 
 config:
   options:

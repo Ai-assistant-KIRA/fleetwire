@@ -67,12 +67,21 @@ requires:
   runtime-database:
     interface: postgresql_client
     limit: 1
+  # COS Lite: Pebble forwards the service's output to Loki.
+  logging:
+    interface: loki_push_api
 
 provides:
   ingest:
     interface: fleetwire_ingest
   crl:
     interface: fleetwire_crl
+  # COS Lite: Prometheus scrapes the admin listener (9090, /metrics) on the
+  # pod and loads the alert rules; Grafana gets the fleetwire dashboard.
+  metrics-endpoint:
+    interface: prometheus_scrape
+  grafana-dashboard:
+    interface: grafana_dashboard
 
 actions:
   create-operator-token:

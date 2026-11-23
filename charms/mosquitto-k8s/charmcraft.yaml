@@ -61,6 +61,10 @@ requires:
   crl:
     interface: fleetwire_crl
     limit: 1
+  # COS Lite: Pebble forwards Mosquitto's log (log_dest stdout) to Loki.
+  # Mosquitto has no Prometheus endpoint, so there is no metrics-endpoint.
+  logging:
+    interface: loki_push_api
 
 config:
   options:

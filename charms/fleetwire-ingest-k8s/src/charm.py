@@ -22,6 +22,8 @@ from urllib.parse import quote
 
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires, KafkaRequires
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,17 @@ KAFKA_PASSWORD_FILE = f"{SECRETS}/kafka-password"
 # one-off commands as this user; the charm writes files for it.
 WORKLOAD_UID = 65532
 ADMIN_PORT = 9090
+# Prometheus scrapes the admin listener at the unit's pod address (the "*"
+# target), since the listener is on no Kubernetes service. COS names the
+# scrape job after the model and the application, so the relabeling sets
+# the job label back to the name deploy/prometheus/prometheus.yml uses: the
+# alert rules select on it.
+SCRAPE_JOB = {
+    "job_name": "fleetwire-ingest",
+    "metrics_path": "/metrics",
+    "static_configs": [{"targets": [f"*:{ADMIN_PORT}"]}],
+    "relabel_configs": [{"target_label": "job", "replacement": "fleetwire-ingest"}],
+}
 PEER = "ingest-peers"
 DATABASE_NAME = "fleetwire"
 RUNTIME_ROLE = "charmed_dml"
@@ -128,6 +141,12 @@ class FleetwireIngestCharm(ops.CharmBase):
         self.database = DatabaseRequires(
             self, relation_name="database", database_name=DATABASE_NAME, extra_user_roles=RUNTIME_ROLE
         )
+        # COS Lite: the scrape job with the alert rules in
+        # src/prometheus_alert_rules (charms/cos_files.py copies them from
+        # deploy/prometheus/rules), and Pebble log forwarding of the
+        # service's output to Loki.
+        self.metrics = MetricsEndpointProvider(self, jobs=[SCRAPE_JOB])
+        self.logs = LogForwarder(self)
         for event in (
             self.on.ingest_pebble_ready,
             self.on.config_changed,

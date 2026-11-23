@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import ops
 from charms.data_platform_libs.v0.data_interfaces import KafkaRequires
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,17 @@ PKI = "/etc/fleetwire/pki"
 SECRETS = "/etc/fleetwire/secrets"
 WORKLOAD_UID = 65532
 ADMIN_PORT = 9090
+# Prometheus scrapes the admin listener at the unit's pod address (the "*"
+# target), since the listener is on no Kubernetes service. COS names the
+# scrape job after the model and the application, so the relabeling sets
+# the job label back to the name deploy/prometheus/prometheus.yml uses: the
+# alert rules select on it.
+SCRAPE_JOB = {
+    "job_name": "fleetwire-bridge",
+    "metrics_path": "/metrics",
+    "static_configs": [{"targets": [f"*:{ADMIN_PORT}"]}],
+    "relabel_configs": [{"target_label": "job", "replacement": "fleetwire-bridge"}],
+}
 # The bridge only writes the uplink topic; ingest creates it.
 TOPIC = "fleetwire.uplink.v1"
 PKI_FILES = {"tls-cert": "bridge.pem", "tls-key": "bridge.key", "ca-bundle": "ca-bundle.pem"}
@@ -79,6 +92,12 @@ class FleetwireBridgeCharm(ops.CharmBase):
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
         self.kafka = KafkaRequires(self, relation_name="kafka", topic=TOPIC, extra_user_roles="producer")
+        # COS Lite: the scrape job with the alert rules in
+        # src/prometheus_alert_rules (charms/cos_files.py copies them from
+        # deploy/prometheus/rules), and Pebble log forwarding of the
+        # service's output to Loki.
+        self.metrics = MetricsEndpointProvider(self, jobs=[SCRAPE_JOB])
+        self.logs = LogForwarder(self)
         for event in (
             self.on.bridge_pebble_ready,
             self.on.config_changed,

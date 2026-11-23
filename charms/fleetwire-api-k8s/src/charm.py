@@ -30,6 +30,9 @@ from urllib.parse import quote
 
 import ops
 from charms.data_platform_libs.v0.data_interfaces import DatabaseRequires
+from charms.grafana_k8s.v0.grafana_dashboard import GrafanaDashboardProvider
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,17 @@ WORKLOAD_UID = 65532
 AS_WORKLOAD = {"user_id": WORKLOAD_UID, "group_id": WORKLOAD_UID}
 OWN_FILE = {**AS_WORKLOAD, "make_dirs": True, "permissions": 0o600}
 PUBLIC_PORT, DEVICE_PORT, INTERNAL_PORT, ADMIN_PORT = 8443, 8444, 8445, 9090
+# Prometheus scrapes the admin listener at the unit's pod address (the "*"
+# target), since the listener is on no Kubernetes service. COS names the
+# scrape job after the model and the application, so the relabeling sets
+# the job label back to the name deploy/prometheus/prometheus.yml uses: the
+# alert rules select on it.
+SCRAPE_JOB = {
+    "job_name": "fleetwire-api",
+    "metrics_path": "/metrics",
+    "static_configs": [{"targets": [f"*:{ADMIN_PORT}"]}],
+    "relabel_configs": [{"target_label": "job", "replacement": "fleetwire-api"}],
+}
 DATABASE_NAME = "fleetwire"
 # The Charmed PostgreSQL group every runtime relation user joins
 # (extra-user-roles); the migrations write the policies and grants for it.
@@ -136,6 +150,14 @@ class FleetwireApiCharm(ops.CharmBase):
         self.runtime_db = DatabaseRequires(
             self, relation_name=RUNTIME_ENDPOINT, database_name=DATABASE_NAME, extra_user_roles=RUNTIME_ROLE
         )
+        # COS Lite: the scrape job with the alert rules in
+        # src/prometheus_alert_rules, the fleetwire dashboard in
+        # src/grafana_dashboards (only this charm ships it), and Pebble log
+        # forwarding of the service's output to Loki. charms/cos_files.py
+        # copies the rules and the dashboard from deploy/.
+        self.metrics = MetricsEndpointProvider(self, jobs=[SCRAPE_JOB])
+        self.dashboards = GrafanaDashboardProvider(self)
+        self.logs = LogForwarder(self)
         observe = self.framework.observe
         for event in (
             self.on.api_pebble_ready,

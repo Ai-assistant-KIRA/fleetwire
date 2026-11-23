@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 
 import ops
+from charms.loki_k8s.v1.loki_push_api import LogForwarder
 
 logger = logging.getLogger(__name__)
 
@@ -142,6 +143,8 @@ class MosquittoCharm(ops.CharmBase):
 
     def __init__(self, framework: ops.Framework):
         super().__init__(framework)
+        # COS Lite: Pebble forwards Mosquitto's log to Loki.
+        self.logs = LogForwarder(self)
         for event in (
             self.on.mosquitto_pebble_ready,
             self.on.config_changed,
