@@ -25,6 +25,11 @@ parts:
   charm:
     plugin: charm
     source: .
+    # requirements.txt pins every package, and only pydantic-core (for the
+    # COS libraries' cosl) comes from a wheel: it has no pure-Python build.
+    charm-strict-dependencies: true
+    charm-requirements: [requirements.txt]
+    charm-binary-python-packages: [pydantic-core]
 
 containers:
   bridge:

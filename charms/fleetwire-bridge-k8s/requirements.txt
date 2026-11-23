@@ -1,1 +1,16 @@
-ops==3.9.0
+# Every package the charm installs, pinned: charmcraft.yaml sets
+# charm-strict-dependencies. cosl is the PYDEPS of the COS libraries in lib/.
+# Regenerate with: uv pip compile --python-version 3.12 --no-header --annotation-style line
+# from ops==3.9.0 and cosl==1.11.3.
+annotated-types==0.8.0    # via pydantic
+cosl==1.11.3
+diskcache==5.6.3          # via cosl
+opentelemetry-api==1.45.2  # via ops
+ops==3.9.0                # via cosl
+pydantic==2.14.4          # via cosl
+pydantic-core==2.50.5     # via pydantic
+pyyaml==6.0.4             # via cosl, ops
+tenacity==9.2.1           # via cosl
+typing-extensions==4.16.0  # via cosl, opentelemetry-api, pydantic, pydantic-core, typing-inspection
+typing-inspection==0.4.5  # via pydantic
+websocket-client==1.9.2   # via ops
