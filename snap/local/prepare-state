@@ -1,0 +1,9 @@
+#!/bin/sh
+# Command chain of the daemon, before drop-privileges, while it is still
+# root: makes sure $SNAP_DATA/state exists and belongs to snap_daemon. The
+# install and post-refresh hooks normally did that already; this covers a
+# state directory deleted by hand, a crash that lost owner changes, and a
+# revert or snapshot restore, after which no refresh hook runs.
+set -eu
+"$SNAP/bin/fleetwire-agent" prepare-state
+exec "$@"

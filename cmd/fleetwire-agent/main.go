@@ -5,9 +5,11 @@
 //	fleetwire-agent config docs     print the configuration reference
 //	fleetwire-agent status [-json]  last seq, acked seq, gaps, certificate expiry
 //	fleetwire-agent version
+//	fleetwire-agent prepare-state   create or migrate $SNAP_DATA/state (snap hooks, as root)
 //
 // Inside the snap, configuration comes from `snapctl get -d` and state lives
-// in $SNAP_DATA. Outside it, use -data-dir, -config file.json and -set key=value.
+// in $SNAP_DATA/state, owned by the snap_daemon user the daemon runs as.
+// Outside it, use -data-dir, -config file.json and -set key=value.
 package main
 
 import (
@@ -17,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -31,6 +34,7 @@ import (
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/agent"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/agent/collect"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/agent/config"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/agent/statedir"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/buildinfo"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/telemetry"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/wal"
@@ -80,7 +84,7 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("fleetwire-agent "+cmd, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	if e.inSnap {
-		e.dataDir = os.Getenv("SNAP_DATA")
+		e.dataDir = filepath.Join(os.Getenv("SNAP_DATA"), statedir.Name)
 	} else {
 		fs.StringVar(&e.dataDir, "data-dir", "/var/lib/fleetwire-agent", "State directory (identity and local log).")
 		fs.StringVar(&e.cfgFile, "config", "", "JSON configuration file.")
@@ -107,11 +111,18 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		return status(ctx, e, *jsonOut, stdout)
 	case "run":
 		return daemon(ctx, e, stderr)
+	case "prepare-state":
+		return prepareState(e, stderr) //nolint:contextcheck // it reports health with SnapHealth, which bounds its own snapctl call, as in daemon
 	}
 	return fmt.Errorf("unknown command %q", cmd)
 }
 
 func daemon(ctx context.Context, e *env, logOut io.Writer) error {
+	if e.inSnap && os.Geteuid() == 0 {
+		// Files it wrote would be root's, and the snap_daemon user could
+		// not open them at the next start.
+		return errors.New("the daemon must not run as root in the snap: start it with snap start, whose command chain drops to snap_daemon")
+	}
 	cfg, err := e.load(ctx)
 	if err != nil {
 		return err
@@ -186,7 +197,11 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 	} else {
 		in, ierr := wal.Inspect(filepath.Join(e.dataDir, "wal"))
 		if ierr != nil {
-			return fmt.Errorf("agent not reachable (%w) and state unreadable: %w", err, ierr)
+			hint := ""
+			if errors.Is(ierr, fs.ErrPermission) {
+				hint = " (the state belongs to the daemon's user: run status with sudo)"
+			}
+			return fmt.Errorf("agent not reachable (%w) and state unreadable%s: %w", err, hint, ierr)
 		}
 		// The daemon is this same binary, so its version is the
 		// installed one.
@@ -208,6 +223,37 @@ func status(ctx context.Context, e *env, asJSON bool, out io.Writer) error {
 		if v, ok := st[k]; ok {
 			fmt.Fprintf(out, "%-15s %v\n", k+":", v)
 		}
+	}
+	return nil
+}
+
+// prepareState creates $SNAP_DATA/state for the snap_daemon user, moving
+// the identity and log of v0.1.1 and earlier into it (see statedir). The
+// install and post-refresh hooks run it as root before snapd starts the
+// daemon, and the daemon's command chain runs it again before each start.
+func prepareState(e *env, logOut io.Writer) error {
+	if !e.inSnap {
+		return errors.New("prepare-state works only inside the snap; outside it, -data-dir is used as it is")
+	}
+	if os.Geteuid() != 0 {
+		return errors.New("prepare-state must run as root: the snap's hooks and daemon run it")
+	}
+	lg, err := telemetry.NewLogger(logOut, "fleetwire-agent", "info")
+	if err != nil {
+		return err
+	}
+	res, err := statedir.Prepare(os.Getenv("SNAP_DATA"), statedir.SnapDaemonID, statedir.SnapDaemonID)
+	if err != nil {
+		(&agent.SnapHealth{Log: lg}).Set("error", "cannot prepare the state directory: see the log")
+		return fmt.Errorf("prepare state directory: %w", err)
+	}
+	switch {
+	case len(res.Moved) > 0:
+		lg.Info("moved the state into its own directory", "moved", res.Moved, "dir", e.dataDir, "owner_uid", statedir.SnapDaemonID)
+	case res.Created:
+		lg.Info("created the state directory", "dir", e.dataDir, "owner_uid", statedir.SnapDaemonID)
+	case res.Repaired:
+		lg.Warn("gave the state directory back to its owner", "dir", e.dataDir, "owner_uid", statedir.SnapDaemonID)
 	}
 	return nil
 }

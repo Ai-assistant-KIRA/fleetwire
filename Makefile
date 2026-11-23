@@ -74,8 +74,8 @@ rules-test: ## Check the Prometheus rules and run their unit tests
 	done
 
 .PHONY: shellcheck
-shellcheck: ## Check every shell script, including the snap hook, with shellcheck
-	git ls-files -z '*.sh' snap/hooks/configure | xargs -0 shellcheck
+shellcheck: ## Check every shell script, including the snap hooks and command chain, with shellcheck
+	git ls-files -z '*.sh' 'snap/hooks/*' 'snap/local/*' | xargs -0 shellcheck
 
 .PHONY: docs-reference
 docs-reference: build ## Regenerate docs/reference/configuration.md from the config structs

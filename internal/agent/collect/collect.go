@@ -7,7 +7,7 @@
 //	memory   /proc/meminfo                             system-observe
 //	load     /proc/loadavg                             system-observe
 //	uptime   /proc/uptime                              system-observe
-//	disk     statfs($SNAP_DATA)                        none
+//	disk     statfs($SNAP_DATA/state)                  none
 //	thermal  /sys/class/thermal/thermal_zone*/{type,temp}  hardware-observe
 //
 // New sensors implement Collector; the core does not change.

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Runs once, as root, before snapd starts the daemon for the first time:
+# creates $SNAP_DATA/state for the snap_daemon user the daemon runs as.
+# The configure hook runs after it.
+set -eu
+exec "$SNAP/bin/fleetwire-agent" prepare-state

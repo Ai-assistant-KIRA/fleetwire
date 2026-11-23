@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs as root in the new revision, on its copy of $SNAP_DATA, before
+# snapd starts the daemon. Up to v0.1.1 the agent kept identity/ and wal/
+# directly in $SNAP_DATA; prepare-state moves them into $SNAP_DATA/state
+# and gives that to snap_daemon. If it fails, snapd rolls the refresh
+# back, and the old revision finds its own copy of $SNAP_DATA unchanged.
+set -eu
+exec "$SNAP/bin/fleetwire-agent" prepare-state
