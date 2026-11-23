@@ -301,7 +301,10 @@ paths:
     get:
       tags: [exports]
       operationId: getExport
-      description: "Scope: exports:read."
+      description: >-
+        Scope: exports:read. Exports are deleted 30 days after expires_at,
+        or 30 days after created_at if they failed; after that the answer
+        is 404.
       parameters: [{$ref: "#/components/parameters/id"}]
       responses:
         "200":

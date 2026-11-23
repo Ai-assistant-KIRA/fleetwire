@@ -266,6 +266,28 @@ func (t *Tx) ExpiredExports(ctx context.Context, now time.Time, limit int) ([]Ex
 	return v, nil
 }
 
+// OldExports lists exports of the current tenant that expired before
+// cutoff, or failed and were created before it.
+func (t *Tx) OldExports(ctx context.Context, cutoff time.Time, limit int) ([]Export, error) {
+	v, err := many[Export](t.tx.Query(ctx, `
+		SELECT `+exportCols+` FROM fleetwire.exports
+		WHERE (status IN ('ready', 'expired') AND expires_at < $1) OR (status = 'failed' AND created_at < $1)
+		ORDER BY created_at LIMIT $2`, cutoff, limit))
+	if err != nil {
+		return nil, fmt.Errorf("old exports: %w", err)
+	}
+	return v, nil
+}
+
+// DeleteExport deletes an export of the current tenant. The caller deletes
+// its file first.
+func (t *Tx) DeleteExport(ctx context.Context, id uuid.UUID) error {
+	if _, err := t.tx.Exec(ctx, `DELETE FROM fleetwire.exports WHERE id = $1`, id); err != nil {
+		return fmt.Errorf("delete export: %w", err)
+	}
+	return nil
+}
+
 // ExportFiles lists every export file path of the current tenant.
 func (t *Tx) ExportFiles(ctx context.Context) ([]string, error) {
 	rows, err := t.tx.Query(ctx, `SELECT file_path FROM fleetwire.exports WHERE file_path IS NOT NULL`)

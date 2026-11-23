@@ -130,6 +130,60 @@ func TestRetentionDeletesOnlyFilesInTheExportDir(t *testing.T) {
 	}
 }
 
+// TestRetentionDeletesOldExports: retention deletes exports 30 days after
+// they expired or failed, and a file a deleted export still names goes
+// first. Younger ones stay.
+func TestRetentionDeletesOldExports(t *testing.T) {
+	e := newEnv(t, Config{})
+	tenant := e.tenant()
+	leftover := filepath.Join(e.exportDir, tenant.String(), "leftover.ndjson.gz")
+	if err := os.MkdirAll(filepath.Dir(leftover), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leftover, []byte("decrypted readings"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, set string
+		args      []any
+		deleted   bool
+	}{
+		{"expired 31 days ago", `status = 'expired', expires_at = now() - interval '31 days'`, nil, true},
+		{"expired 31 days ago, file left", `status = 'expired', file_path = $2, expires_at = now() - interval '31 days'`,
+			[]any{leftover}, true},
+		{"expired 29 days ago", `status = 'expired', expires_at = now() - interval '29 days'`, nil, false},
+		{"failed 31 days ago", `status = 'failed', error = 'x', created_at = now() - interval '31 days'`, nil, true},
+		{"failed a day ago", `status = 'failed', error = 'x', created_at = now() - interval '1 day'`, nil, false},
+		{"ready", `status = 'ready', expires_at = now() + interval '1 hour'`, nil, false},
+	}
+	ids := make([]uuid.UUID, len(cases))
+	for i, c := range cases {
+		ids[i], _ = e.export(tenant)
+		e.asOwner(`UPDATE fleetwire.exports SET `+c.set+` WHERE id = $1`, append([]any{ids[i]}, c.args...)...)
+	}
+	// The export jobs find nothing to do.
+	job := e.enqueue(tenant, store.JobRetention, struct{}{}, "")
+	e.runJobs()
+	if j := e.job(tenant, job); j.Status != store.JobSucceeded {
+		t.Fatalf("retention %s: %s", j.Status, lastError(j))
+	}
+	for i, c := range cases {
+		err := e.db.InTenantTx(t.Context(), tenant, func(ctx context.Context, tx *store.Tx) error {
+			_, err := tx.GetExport(ctx, ids[i])
+			return err
+		})
+		switch {
+		case c.deleted && !errors.Is(err, store.ErrNotFound):
+			t.Errorf("%s: not deleted (%v)", c.name, err)
+		case !c.deleted && err != nil:
+			t.Errorf("%s: %v, want it kept", c.name, err)
+		}
+	}
+	if _, err := os.Stat(leftover); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file of a deleted export is still there (%v)", err)
+	}
+}
+
 // TestExportAttemptsDoNotShareAFile: an export does not write into or
 // delete a temp file another attempt of the same export is writing.
 func TestExportAttemptsDoNotShareAFile(t *testing.T) {

@@ -26,7 +26,15 @@ type retentionResult struct {
 	GapsDeleted      int64     `json:"gaps_deleted"`
 	TempFilesDeleted int       `json:"temp_files_deleted"`
 	ExportsExpired   int       `json:"exports_expired"`
+	ExportsDeleted   int       `json:"exports_deleted"`
 }
+
+// exportKeep is how long an export stays after it expired or failed, so
+// that GET /v1/exports/{id} still says what became of it. Retention then
+// deletes it, as finished jobs are deleted 30 days after they finish
+// (migration 00008). A failed export has no expiry, so its 30 days count
+// from its creation.
+const exportKeep = 30 * 24 * time.Hour
 
 // tempSuffix ends the name of every export file still being written.
 const tempSuffix = ".tmp"
@@ -71,7 +79,8 @@ func (w *Worker) removeStaleTemps(tenant uuid.UUID) (int, error) {
 }
 
 // retention deletes readings and gap records older than the tenant's
-// retention period, and export files past their expiry.
+// retention period, export files past their expiry, and exports exportKeep
+// after they expired or failed.
 func (w *Worker) retention(ctx context.Context, tenant uuid.UUID) (any, error) {
 	var t store.Tenant
 	err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
@@ -110,7 +119,7 @@ func (w *Worker) retention(ctx context.Context, tenant uuid.UUID) (any, error) {
 			return nil, err
 		}
 		if len(expired) == 0 {
-			return res, nil
+			break
 		}
 		for _, e := range expired {
 			if e.FilePath != nil {
@@ -124,6 +133,46 @@ func (w *Worker) retention(ctx context.Context, tenant uuid.UUID) (any, error) {
 				return nil, err
 			}
 			res.ExportsExpired++
+		}
+	}
+	if res.ExportsDeleted, err = w.deleteOldExports(ctx, tenant); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// deleteOldExports deletes the tenant's exports exportKeep after they
+// expired or failed. An expired export normally has no file left; a path
+// still recorded is deleted first, so deleting the row never leaves a file
+// that nothing names.
+func (w *Worker) deleteOldExports(ctx context.Context, tenant uuid.UUID) (int, error) {
+	cutoff := w.now().Add(-exportKeep)
+	n := 0
+	for {
+		var old []store.Export
+		err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
+			var err error
+			old, err = tx.OldExports(ctx, cutoff, 100)
+			return err
+		})
+		if err != nil {
+			return n, err
+		}
+		if len(old) == 0 {
+			return n, nil
+		}
+		for _, e := range old {
+			if e.FilePath != nil {
+				if _, err := w.removeExportFile(*e.FilePath); err != nil {
+					return n, err
+				}
+			}
+			if err := w.d.DB.InTenantTx(ctx, tenant, func(ctx context.Context, tx *store.Tx) error {
+				return tx.DeleteExport(ctx, e.ID)
+			}); err != nil {
+				return n, err
+			}
+			n++
 		}
 	}
 }

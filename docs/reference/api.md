@@ -68,4 +68,6 @@ A tenant can have 4 exports pending or running at once
 (`FLEETWIRE_API_MAX_ACTIVE_EXPORTS`); another `POST /v1/exports` gets `409`
 with code `too_many_exports`. A download past the export's `expires_at`
 gets `410` with code `expired`. `HEAD` on the download sends the status and
-headers, `Content-Digest` included, without the file.
+headers, `Content-Digest` included, without the file. The API deletes an
+export 30 days after its `expires_at`, or 30 days after its `created_at`
+if it failed; `GET /v1/exports/{id}` and the download then answer `404`.
