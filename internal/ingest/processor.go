@@ -168,12 +168,14 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 	}
 	keyID, dek, err := p.keys.SealingKey(ctx, tenant)
 	if errors.Is(err, tenantkey.ErrDestroyed) {
+		// SealingKey has dropped the tenant's other keys already.
 		out.Result = ResultDroppedRevoked
 		return out, nil
 	}
 	if err != nil {
 		return out, err
 	}
+	tenantGone := false
 
 	start := p.now()
 	var stored []*fleetwirev1.StoredReading
@@ -193,6 +195,7 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 		if dev.DeviceStatus != store.DeviceActive || dev.TenantStatus != store.TenantActive {
 			// Revocation is effective from its commit on (layer 1 in ADR-0010).
 			out.Result = ResultDroppedRevoked
+			tenantGone = dev.TenantStatus != store.TenantActive
 			if p.shouldAudit(device) {
 				a := dropAudit(device, "device "+dev.DeviceStatus+", tenant "+dev.TenantStatus)
 				w.Audit = &a
@@ -239,6 +242,12 @@ func (p *Processor) Process(ctx context.Context, device uuid.UUID, payload []byt
 		return w, nil
 	})
 	p.m.TxSeconds.Observe(p.now().Sub(start).Seconds())
+	if tenantGone {
+		// The sealing key came from the cache, which may hold it for minutes
+		// yet. A tenant never becomes active again, so its keys go now, even
+		// if writing the drop's audit entry failed.
+		p.keys.ForgetInactive(tenant)
+	}
 	if err != nil {
 		if store.IsExclusionViolation(err) {
 			// The chunks and gaps were computed as the uncovered parts, so an

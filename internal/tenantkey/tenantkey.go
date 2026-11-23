@@ -39,6 +39,10 @@ const (
 	cacheTTL  = 5 * time.Minute
 	cacheSize = 10_000
 	activeTTL = time.Minute
+	// sweepEvery is how often Run removes expired keys from memory. With
+	// it, no unwrapped key stays longer than cacheTTL + sweepEvery after it
+	// was cached, even when nothing asks for it again.
+	sweepEvery = 30 * time.Second
 	// refreshTimeout bounds a shared reload of a sealing key. The reload
 	// runs detached from the caller that started it, so one caller giving
 	// up does not fail the others waiting for it.
@@ -75,6 +79,8 @@ type Manager struct {
 	// for its own tenant and Forget can drop all of a tenant's keys.
 	deks   *lru.Cache[sealKey, []byte]
 	active *lru.Cache[uuid.UUID, *active]
+	// inactive holds the tenants ForgetInactive dropped recently.
+	inactive *lru.Cache[uuid.UUID, struct{}]
 	// reloads makes the ingest workers of one tenant, which all miss the
 	// active key when it expires, share one reload.
 	reloads singleflight.Group
@@ -87,13 +93,34 @@ type Manager struct {
 // New returns a manager.
 func New(db *store.DB, kr keyring.Keyring, log *slog.Logger) *Manager {
 	return &Manager{
-		db:      db,
-		kr:      kr,
-		log:     log,
-		deks:    lru.New[sealKey, []byte](cacheSize, cacheTTL),
-		active:  lru.New[uuid.UUID, *active](cacheSize, activeTTL),
-		pending: map[sealKey]int64{},
-		now:     time.Now,
+		db:       db,
+		kr:       kr,
+		log:      log,
+		deks:     lru.New[sealKey, []byte](cacheSize, cacheTTL),
+		active:   lru.New[uuid.UUID, *active](cacheSize, activeTTL),
+		inactive: lru.New[uuid.UUID, struct{}](cacheSize, cacheTTL),
+		pending:  map[sealKey]int64{},
+		now:      time.Now,
+	}
+}
+
+// Run removes expired keys from memory every sweepEvery until ctx ends.
+// The caches drop an expired key only when it is asked for, and nothing
+// asks again for the keys of a tenant that another process destroyed:
+// without Run they would stay until the cache filled up. Every process
+// that unwraps keys runs it.
+func (m *Manager) Run(ctx context.Context) {
+	t := time.NewTicker(sweepEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.deks.RemoveExpired()
+			m.active.RemoveExpired()
+			m.inactive.RemoveExpired()
+		}
 	}
 }
 
@@ -145,7 +172,13 @@ func (m *Manager) SealingKey(ctx context.Context, tenant uuid.UUID) (uuid.UUID, 
 	ch := m.reloads.DoChan(tenant.String(), func() (any, error) {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refreshTimeout)
 		defer cancel()
-		return m.reload(rctx, tenant)
+		a, err := m.reload(rctx, tenant)
+		if errors.Is(err, ErrDestroyed) {
+			// The sealing key expired from the cache, but older keys of
+			// the tenant may still be there for opening chunks.
+			m.ForgetInactive(tenant)
+		}
+		return a, err
 	})
 	select {
 	case <-ctx.Done():
@@ -282,6 +315,11 @@ func (m *Manager) Key(ctx context.Context, tenant, keyID uuid.UUID) ([]byte, err
 		return nil, fmt.Errorf("data key %s: %w", keyID, err)
 	}
 	dek, err := m.unwrap(ctx, k)
+	if errors.Is(err, ErrDestroyed) {
+		// Every key of a tenant is destroyed at once, so the others this
+		// process holds belong to a destroyed tenant too.
+		m.ForgetInactive(tenant)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("data key %s: %w", keyID, err)
 	}
@@ -307,7 +345,8 @@ func (m *Manager) unwrap(ctx context.Context, k store.TenantKey) ([]byte, error)
 // sealing key, every other unwrapped key, retired ones included, and seal
 // counts not flushed yet. A Key call that read the tenant's key row before
 // the destroy committed can still cache a key after Forget; the destroy job
-// calls Forget again once the tenant's KEK is gone and no unwrap can work.
+// calls Forget again once the tenant's KEK is gone and no unwrap can work,
+// and in other processes Run removes such a key once it expires.
 func (m *Manager) Forget(tenant uuid.UUID) {
 	m.active.Remove(tenant)
 	m.deks.RemoveFunc(func(k sealKey) bool { return k.tenant == tenant })
@@ -318,6 +357,21 @@ func (m *Manager) Forget(tenant uuid.UUID) {
 		}
 	}
 	m.mu.Unlock()
+}
+
+// ForgetInactive is Forget for a process that finds a tenant is no longer
+// active on its own, for example ingest dropping a batch under the device's
+// row lock. The devices of a destroyed tenant can go on sending, so it is
+// called for batch after batch: after the first call it does nothing for
+// cacheTTL instead of scanning the whole key cache every time. A key cached
+// in that time, by an unwrap that started before the destroy, still leaves
+// when it expires.
+func (m *Manager) ForgetInactive(tenant uuid.UUID) {
+	if _, ok := m.inactive.Get(tenant); ok {
+		return
+	}
+	m.inactive.Add(tenant, struct{}{})
+	m.Forget(tenant)
 }
 
 // NoteSeals records n chunks sealed with keyID. Counts are written to the

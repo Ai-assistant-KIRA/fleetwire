@@ -117,7 +117,30 @@ func (c *Cache[K, V]) RemoveFunc(match func(K) bool) {
 	}
 }
 
-// Len is the number of entries.
+// RemoveExpired deletes every expired entry and returns how many it
+// deleted. Get drops an expired entry only when it is asked for, so an
+// entry nobody asks for again stays in memory until the cache fills up;
+// a cache of secrets calls this on a timer to bound how long they stay.
+// It visits every entry.
+func (c *Cache[K, V]) RemoveExpired() int {
+	if c.ttl == 0 {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	now := c.now()
+	n := 0
+	for key, el := range c.items {
+		if now.After(at[K, V](el).expires) {
+			c.order.Remove(el)
+			delete(c.items, key)
+			n++
+		}
+	}
+	return n
+}
+
+// Len is the number of entries, expired ones included until they are removed.
 func (c *Cache[K, V]) Len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()

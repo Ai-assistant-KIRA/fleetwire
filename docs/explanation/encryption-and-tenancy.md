@@ -15,7 +15,9 @@ root key (32 bytes, owner-only file)
   fails to open.
 - Nonces are 96 random bits. A data key seals at most 2^24 chunks or lives
   90 days, then a new one is made under a tenant row lock.
-- Unwrapped data keys are cached in memory for 5 minutes.
+- Unwrapped data keys are cached in memory for up to 5 minutes after they
+  are unwrapped. Every process that caches them removes expired ones every
+  30 seconds, whether or not anything asks for them again.
 - Two keyring backends: the directory itself, which the API and ingest share
   on one host, and in Kubernetes a client of the API's keyring listener.
   There ingest holds data keys while it uses them, never a KEK or the root
@@ -34,6 +36,16 @@ backups taken earlier. A restartable job then deletes the rows and export
 files and marks the tenant `destroyed`. The tenant row and the audit log
 stay.
 
+Unwrapped data keys of the tenant leave memory as follows. The API process
+that handles the destroy drops them at once. Ingest drops them at the
+tenant's first batch after the destroy, when it finds the tenant no longer
+active. Any other process, such as another API replica, drops them when they
+expire. No unwrap works once the KEK is gone, so 5½ minutes after the KEK is
+destroyed (5 minutes in the cache plus one 30-second sweep) no process holds
+a data key of the tenant, even if no more batches arrive. An unwrap that was
+already under way at that moment can add the time it takes to finish; the
+remote keyring client gives up after 10 seconds.
+
 **Limits, stated plainly:**
 
 - Deleting a file on an SSD is not a secure erase. Production should use a
@@ -44,6 +56,9 @@ stay.
   ([Back up the keyring](../how-to/back-up-the-keyring.md)).
 - Export files are plaintext for up to 24 hours. Put the export directory
   on an encrypted volume.
+- Dropping a data key removes it from the caches; Go does not zero the
+  memory. Its bytes stay in the process's heap until the memory is reused,
+  readable by root or in a core dump.
 
 ## Tenant isolation
 

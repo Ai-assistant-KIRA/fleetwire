@@ -2,6 +2,7 @@ package ingest_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"math/rand/v2"
@@ -21,6 +22,7 @@ import (
 	fleetwirev1 "github.com/Ai-assistant-KIRA/fleetwire/internal/gen/fleetwirev1"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/ingest"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/store"
+	"github.com/Ai-assistant-KIRA/fleetwire/internal/tenantkey"
 	"github.com/Ai-assistant-KIRA/fleetwire/internal/uplinkpb"
 )
 
@@ -230,6 +232,41 @@ func TestRevokedAndUnknownDevicesAreDropped(t *testing.T) {
 	h.MustJSON(resp, body, 200, nil)
 	if !contains(body, "ingest.drop") {
 		t.Fatalf("no ingest.drop audit entry: %s", body)
+	}
+}
+
+// TestDropForADestroyedTenantForgetsItsKeys: when ingest drops a batch
+// because the tenant is no longer active, it drops the tenant's data keys
+// it holds too, instead of keeping them until they expire. Only the
+// database step of the destroy runs here; the API process that would also
+// forget the keys is another process.
+func TestDropForADestroyedTenantForgetsItsKeys(t *testing.T) {
+	h, p, tenant, device, _ := setup(t)
+	out, err := p.Process(t.Context(), device, encode(t, msg{first: 1, last: 5}), time.Now())
+	if err != nil || out.Result != ingest.ResultStored {
+		t.Fatalf("first batch: %+v, %v", out, err)
+	}
+	keyID, _, err := h.Keys.SealingKey(t.Context(), tenant)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = h.DB.InTenantTx(t.Context(), tenant, func(ctx context.Context, tx *store.Tx) error {
+		if err := tx.SetTenantStatus(ctx, store.TenantDestroying); err != nil {
+			return err
+		}
+		return tx.DestroyTenantKeys(ctx)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = p.Process(t.Context(), device, encode(t, msg{first: 6, last: 10}), time.Now())
+	if err != nil || out.Result != ingest.ResultDroppedRevoked {
+		t.Fatalf("batch after the destroy: %+v, %v", out, err)
+	}
+	// A cached key would be returned as it is; a forgotten one is looked up
+	// again and found destroyed.
+	if _, err := h.Keys.Key(t.Context(), tenant, keyID); !errors.Is(err, tenantkey.ErrDestroyed) {
+		t.Fatalf("the destroyed tenant's key after the drop: %v, want ErrDestroyed", err)
 	}
 }
 

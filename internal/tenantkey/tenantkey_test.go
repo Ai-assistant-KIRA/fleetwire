@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -178,6 +179,60 @@ func TestForgetDropsRetiredKeys(t *testing.T) {
 	if n := m.pendingFor(tenant, old); n != 0 {
 		t.Errorf("%d seals of the destroyed tenant still pending", n)
 	}
+}
+
+// TestReloadOfADestroyedTenantForgetsItsKeys: a process that did not run
+// the destroy finds out when its cached sealing key expires and the reload
+// sees the tenant destroying. The other keys it holds go at that point, not
+// when they expire later.
+func TestReloadOfADestroyedTenantForgetsItsKeys(t *testing.T) {
+	e := newEnv(t)
+	m := e.manager()
+	tenant := e.tenant(m)
+	k := e.sealingKey(m, tenant)
+	if _, err := m.Key(t.Context(), tenant, k); err != nil {
+		t.Fatal(err)
+	}
+	e.destroy(tenant)
+	// The sealing key's minute in the cache is over.
+	m.active.Remove(tenant)
+	if _, _, err := m.SealingKey(t.Context(), tenant); !errors.Is(err, ErrDestroyed) {
+		t.Fatalf("sealing key of a destroyed tenant: %v, want ErrDestroyed", err)
+	}
+	if _, ok := m.deks.Get(sealKey{tenant, k}); ok {
+		t.Fatal("the destroyed tenant's key is still cached after the reload saw the destroy")
+	}
+}
+
+// TestExpiredKeysLeaveMemoryUnasked: Run removes expired keys that nothing
+// asks for again, so a key of a tenant destroyed by another process does
+// not stay until the cache fills up.
+func TestExpiredKeysLeaveMemoryUnasked(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := New(nil, nil, slog.New(slog.DiscardHandler))
+		tenant, key := uuid.New(), uuid.New()
+		dek := make([]byte, 32)
+		m.deks.Add(sealKey{tenant, key}, dek)
+		m.active.Add(tenant, &active{keyID: key, dek: dek, createdAt: time.Now()})
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			m.Run(ctx)
+			close(done)
+		}()
+		time.Sleep(cacheTTL - time.Second)
+		synctest.Wait()
+		if m.deks.Len() != 1 {
+			t.Fatal("a key left the cache before it expired")
+		}
+		time.Sleep(sweepEvery + 2*time.Second)
+		synctest.Wait()
+		if n, a := m.deks.Len(), m.active.Len(); n != 0 || a != 0 {
+			t.Fatalf("%d data keys and %d sealing keys still in memory %s after they were cached", n, a, cacheTTL+sweepEvery+time.Second)
+		}
+		cancel()
+		<-done
+	})
 }
 
 // TestKeyIsNotHandedToAnotherTenant: a cached key of tenant A is not

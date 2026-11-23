@@ -151,6 +151,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 	wg.Go(func() { s.flushSeals(actx) })
 	wg.Go(func() { s.reportLag(ctx) })
+	wg.Go(func() { s.keys.Run(ctx) })
 	defer func() {
 		s.Close()
 		// Acks for everything committed so far get a moment to go out.

@@ -242,6 +242,7 @@ func serve(ctx context.Context, cfg *apiConfig, logOut io.Writer) error {
 	crlCtx, stopCRL := context.WithCancel(context.WithoutCancel(gctx))
 	defer stopCRL()
 	g.Go(func() error { pub.Run(crlCtx, cfg.CRLInterval); return nil })
+	g.Go(func() error { keys.Run(gctx); return nil })
 	g.Go(func() error { return worker.Run(gctx) })
 	g.Go(func() error {
 		defer stopCRL()

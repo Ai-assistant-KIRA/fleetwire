@@ -40,6 +40,34 @@ func TestExpiry(t *testing.T) {
 	}
 }
 
+// TestRemoveExpired: expired entries leave the cache without being asked
+// for; the others stay, in their order.
+func TestRemoveExpired(t *testing.T) {
+	now := time.Unix(0, 0)
+	c := New[string, int](3, time.Minute)
+	c.now = func() time.Time { return now }
+	c.Add("old", 1)
+	now = now.Add(30 * time.Second)
+	c.Add("new", 2)
+	c.Add("newer", 3)
+	now = now.Add(31 * time.Second)
+	if n := c.RemoveExpired(); n != 1 || c.Len() != 2 {
+		t.Fatalf("RemoveExpired = %d, Len = %d; want 1 and 2", n, c.Len())
+	}
+	if _, ok := c.Get("new"); !ok {
+		t.Fatal("an entry that had not expired was removed")
+	}
+	// "newer" is now the least recently used.
+	c.Add("x", 4)
+	c.Add("y", 5)
+	if _, ok := c.Get("newer"); ok {
+		t.Fatal("the eviction order did not survive RemoveExpired")
+	}
+	if n := New[string, int](2, 0).RemoveExpired(); n != 0 {
+		t.Fatalf("a cache without expiry removed %d entries", n)
+	}
+}
+
 func TestRemoveFunc(t *testing.T) {
 	c := New[int, string](10, 0)
 	for i := range 6 {

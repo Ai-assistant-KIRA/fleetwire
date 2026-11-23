@@ -75,7 +75,11 @@ func run(args []string, out io.Writer) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	c := &checker.Checker{DB: db, Keys: tenantkey.New(db, kr, slog.New(slog.DiscardHandler)), Workers: *workers}
+	keys := tenantkey.New(db, kr, slog.New(slog.DiscardHandler))
+	sweepCtx, stopSweep := context.WithCancel(ctx)
+	defer stopSweep()
+	go keys.Run(sweepCtx)
+	c := &checker.Checker{DB: db, Keys: keys, Workers: *workers}
 	rep := c.Run(ctx, exps)
 	fmt.Fprintf(out, "devices %d  readings %d  stored %d  missing %d  duplicates %d  gap seqs %d  beyond last seq %d  unrecorded gap seqs %d  errors %d\n",
 		rep.Devices, rep.Readings, rep.Stored, rep.Missing, rep.Duplicates, rep.GapSeqs, rep.Beyond, rep.LostReports, rep.Errors)

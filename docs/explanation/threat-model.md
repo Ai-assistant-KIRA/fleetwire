@@ -66,6 +66,7 @@ exposed ([deploy guide](../how-to/deploy-with-juju.md)).
 | I5 | Information disclosure | Export files on disk | Accepted with a condition: plaintext for up to 24 h, deleted on expiry and on tenant destroy; the export directory must be on an encrypted volume. |
 | I6 | Information disclosure | Data keys on the wire to ingest (Kubernetes) | TLS 1.2+ with mutual authentication on the internal listener; only data keys travel, never KEKs; answers are `no-store`. A captured key opens only that tenant's chunks sealed with it, which the network attacker would also need. |
 | I7 | Information disclosure | The public CRL endpoint | Accepted: a CRL is public by design (signed serial numbers and revocation times, no device or tenant names). |
+| I8 | Information disclosure | A destroyed tenant's data keys left in service memory | Every process drops them when it sees the tenant is no longer active, and removes expired keys every 30 s: none holds one 5½ minutes after the KEK is destroyed ([encryption and tenancy](encryption-and-tenancy.md)). Accepted: freed memory is not zeroed. |
 | D1 | Denial of service | A device floods the broker | `max_packet_size`, receive maximum, the agent's in-flight window, and Kafka backpressure. |
 | D2 | Denial of service | Poison batch stops ingest | Invalid batches go to the dead-letter topic with a reason; ingest continues. |
 | D3 | Denial of service | API abuse | Per-token rate limits with `Retry-After`, per-address limits on enrollment, 1 MiB body limit, server timeouts. Limits are per replica (accepted). |
