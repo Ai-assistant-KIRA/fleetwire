@@ -57,7 +57,7 @@ x-kafka-env: &kafka-env
   KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
 
 x-kafka: &kafka
-  image: apache/kafka:4.1.0
+  image: apache/kafka:4.3.1
   # No read-only root: the image writes the broker configuration it
   # generates from the environment into /opt/kafka/config at start.
   cap_drop: [ALL]
