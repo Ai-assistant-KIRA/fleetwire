@@ -57,7 +57,7 @@ x-kafka-env: &kafka-env
   KAFKA_HEAP_OPTS: -Xms512m -Xmx512m
 
 x-kafka: &kafka
-  image: apache/kafka:4.1.0
+  image: apache/kafka:4.3.1
   # No read-only root: the image writes the broker configuration it
   # generates from the environment into /opt/kafka/config at start.
   cap_drop: [ALL]
@@ -138,7 +138,7 @@ services:
 
   mosquitto:
     <<: *hardened
-    image: eclipse-mosquitto:2.1.2-alpine
+    image: eclipse-mosquitto:2.1.4-alpine
     restart: unless-stopped
     networks: [fleetwire]
     user: "${FW_UID:-1883}:${FW_GID:-1883}"
@@ -161,7 +161,7 @@ services:
 
   toxiproxy:
     <<: *hardened
-    image: ghcr.io/shopify/toxiproxy:2.12.0
+    image: ghcr.io/shopify/toxiproxy:2.13.0
     restart: unless-stopped
     networks: [fleetwire]
     command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
@@ -289,7 +289,7 @@ services:
 
   prometheus:
     <<: *hardened
-    image: prom/prometheus:v3.7.3
+    image: prom/prometheus:v3.16.0
     restart: unless-stopped
     networks: [fleetwire]
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d", "--web.enable-lifecycle"]
@@ -317,7 +317,7 @@ services:
 
   jaeger:
     <<: *hardened
-    image: jaegertracing/jaeger:2.11.0
+    image: jaegertracing/jaeger:2.23.0
     restart: unless-stopped
     networks: [fleetwire]
     command: ["--config", "file:/etc/jaeger/config.yaml"]
