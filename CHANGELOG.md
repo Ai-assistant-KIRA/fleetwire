@@ -216,6 +216,9 @@ the new services.
 - `uc-install.sh` quotes every argument it passes to the guest, and the demo
   and throughput scripts keep API tokens out of process lists and
   world-readable files.
+- Bump github.com/gorilla/websocket, which the MQTT client pulls in, to the
+  commit that fixes GO-2026-6278 (a weak random source for WebSocket mask
+  keys); no tagged release has the fix yet.
 - The release workflow pins cosign, syft and GoReleaser, publishes only a
   commit that passes CI and the end-to-end test, and the Dockerfiles pin
   their base images by digest.
