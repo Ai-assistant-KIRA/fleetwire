@@ -15,10 +15,17 @@ The deployment is its own test, marked juju_setup, so the data test can run
 again against a model that is already up:
 
     pytest tests/integration --juju-model <prefix> --no-juju-setup --no-juju-teardown
+
+With FLEETWIRE_COS=1, test_cos_lite also deploys Prometheus, Grafana and
+Loki from COS Lite into the model, relates them to the charms, and checks
+that Prometheus scrapes the three services and loaded their alert rules,
+that Grafana has the fleetwire dashboard, and that Loki receives the four
+workloads' logs. It adds about ten minutes, so it is opt-in.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -27,7 +34,9 @@ import shutil
 import socket
 import subprocess
 import time
-from collections.abc import Iterator
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Iterator
 
 import jubilant
 import pytest
@@ -41,6 +50,15 @@ BIN = REPO / "bin"
 IMAGES = os.environ.get("FLEETWIRE_IMAGES", "")
 FLEETWIRE = ("fleetwire-api-k8s", "fleetwire-ingest-k8s", "fleetwire-bridge-k8s", "mosquitto-k8s")
 DEPLOY_TIMEOUT = 40 * 60
+COS = os.environ.get("FLEETWIRE_COS") == "1"
+COS_CHANNEL = "2/stable"
+COS_APPS = ("prometheus-k8s", "grafana-k8s", "loki-k8s")
+# The scrape job of each charm with a metrics endpoint.
+SCRAPED = {
+    "fleetwire-api": "fleetwire-api-k8s",
+    "fleetwire-ingest": "fleetwire-ingest-k8s",
+    "fleetwire-bridge": "fleetwire-bridge-k8s",
+}
 
 
 def run(*args: str | pathlib.Path, cwd: pathlib.Path | None = None) -> str:
@@ -275,3 +293,109 @@ def test_agent_readings_are_stored(juju: jubilant.Juju, tmp_path: pathlib.Path):
         finally:
             agent.terminate()
             agent.wait(timeout=30)
+
+
+def http_json(url: str, auth: tuple[str, str] | None = None) -> dict:
+    request = urllib.request.Request(url)  # noqa: S310 (a port-forward on localhost)
+    if auth:
+        token = base64.b64encode(":".join(auth).encode()).decode()
+        request.add_header("Authorization", f"Basic {token}")
+    with urllib.request.urlopen(request, timeout=10) as resp:  # noqa: S310
+        return json.loads(resp.read())
+
+
+def eventually[T](check: Callable[[], T], what: str, timeout: float = 600) -> T:
+    """Calls check until it returns something true, and returns that."""
+    deadline = time.monotonic() + timeout
+    while True:
+        with contextlib.suppress(OSError, ValueError, KeyError):
+            if result := check():
+                return result
+        assert time.monotonic() < deadline, f"not within {timeout:.0f} s: {what}"
+        time.sleep(10)
+
+
+def integrate(juju: jubilant.Juju, a: str, b: str) -> None:
+    """Integrates a and b unless they already are (a rerun on a kept model)."""
+    try:
+        juju.integrate(a, b)
+    except jubilant.CLIError as e:
+        if "already exists" not in e.stderr:
+            raise
+
+
+def shipped_alerts() -> set[str]:
+    """The alert names in the three charms' copies of the fleetwire rules."""
+    names: set[str] = set()
+    for app in SCRAPED.values():
+        rules = yaml.safe_load((CHARMS / app / "src/prometheus_alert_rules/fleetwire.yml").read_text())
+        names |= {r["alert"] for g in rules["groups"] for r in g["rules"] if "alert" in r}
+    return names
+
+
+@pytest.mark.skipif(not COS, reason="set FLEETWIRE_COS=1 to deploy COS Lite and check it")
+def test_cos_lite(juju: jubilant.Juju):
+    model = model_name(juju)
+    status = juju.status()
+    for app in COS_APPS:
+        if app not in status.apps:
+            juju.deploy(app, channel=COS_CHANNEL, trust=True)
+    for app in SCRAPED.values():
+        integrate(juju, f"{app}:metrics-endpoint", "prometheus-k8s:metrics-endpoint")
+    for app in FLEETWIRE:
+        integrate(juju, f"{app}:logging", "loki-k8s:logging")
+    integrate(juju, "fleetwire-api-k8s:grafana-dashboard", "grafana-k8s:grafana-dashboard")
+    integrate(juju, "grafana-k8s:grafana-source", "prometheus-k8s:grafana-source")
+    integrate(juju, "grafana-k8s:grafana-source", "loki-k8s:grafana-source")
+    juju.wait(
+        lambda s: all_active(s) and jubilant.all_active(s, *COS_APPS),
+        error=charm_failed,
+        timeout=DEPLOY_TIMEOUT,
+        delay=10,
+    )
+
+    with port_forward(model, "pod/prometheus-k8s-0", 19090, 9090):
+        prometheus = "http://127.0.0.1:19090/api/v1"
+
+        def fleetwire_up() -> dict[str, str]:
+            query = urllib.parse.quote('up{job=~"fleetwire-.*"}')
+            result = http_json(f"{prometheus}/query?query={query}")["data"]["result"]
+            up = {r["metric"]["job"]: r["value"][1] for r in result}
+            return up if up == dict.fromkeys(SCRAPED, "1") else {}
+
+        print("up:", eventually(fleetwire_up, "up == 1 for fleetwire-api, -ingest and -bridge"))
+        for target in http_json(f"{prometheus}/targets?state=active")["data"]["activeTargets"]:
+            if target["labels"]["job"] in SCRAPED:
+                print("target:", target["labels"]["job"], target["scrapeUrl"], target["health"])
+
+        def loaded() -> set[str]:
+            groups = http_json(f"{prometheus}/rules?type=alert")["data"]["groups"]
+            names = {r["name"] for g in groups for r in g["rules"]}
+            return names if shipped_alerts() <= names else set()
+
+        rules = eventually(loaded, "the fleetwire alert rules are loaded")
+        print("alert rules:", len(rules & shipped_alerts()), "fleetwire of", len(rules))
+
+    password = juju.run("grafana-k8s/0", "get-admin-password").results["admin-password"]
+    with port_forward(model, "pod/grafana-k8s-0", 13000, 3000):
+
+        def dashboards() -> list[dict]:
+            found = http_json("http://127.0.0.1:13000/api/search?query=fleetwire", auth=("admin", password))
+            return [d for d in found if d.get("title") == "fleetwire"]
+
+        print("dashboards:", [(d["title"], d["uid"]) for d in eventually(dashboards, "the fleetwire dashboard")])
+
+    # Pebble also forwards the lines still in each service's log buffer, so
+    # the startup lines of a quiet service arrive too.
+    with port_forward(model, "pod/loki-k8s-0", 13100, 3100):
+        loki = "http://127.0.0.1:13100/loki/api/v1"
+
+        def logged() -> set[str]:
+            apps = set(http_json(f"{loki}/label/juju_application/values")["data"])
+            return apps if set(FLEETWIRE) <= apps else set()
+
+        eventually(logged, "Loki has logs of the four fleetwire workloads")
+        for app in FLEETWIRE:
+            query = urllib.parse.quote(f'{{juju_application="{app}"}}')
+            streams = http_json(f"{loki}/query_range?query={query}&limit=1")["data"]["result"]
+            print("loki:", app, streams[0]["values"][0][1][:160])
