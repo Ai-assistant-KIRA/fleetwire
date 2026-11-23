@@ -289,7 +289,7 @@ services:
 
   prometheus:
     <<: *hardened
-    image: prom/prometheus:v3.7.3
+    image: prom/prometheus:v3.16.0
     restart: unless-stopped
     networks: [fleetwire]
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=7d", "--web.enable-lifecycle"]
