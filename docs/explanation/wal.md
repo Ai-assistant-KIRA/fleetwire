@@ -1,7 +1,8 @@
 # The device's local log
 
 Every reading is appended to a segmented write-ahead log in
-`$SNAP_DATA/wal/` before it can be sent (ADR-0004).
+`$SNAP_DATA/state/wal/` before it can be sent (ADR-0004). Outside the snap
+the log is `wal/` in the `-data-dir` directory.
 
 ## Format
 

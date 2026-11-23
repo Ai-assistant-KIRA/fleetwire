@@ -98,4 +98,8 @@ Served with `fleetwire-loadgen -metrics-listen`, next to the agent and
 | `device_failures_total` | counter | | device instances that ran and stopped with an error |
 
 Every binary also exports Go runtime and process metrics and
-`fleetwire_build_info{service,version,commit}`.
+`fleetwire_build_info{service,version,commit}`. The agent snap leaves out
+`process_network_receive_bytes_total` and
+`process_network_transmit_bytes_total`: they come from
+`/proc/<pid>/net/netstat`, which the snap's AppArmor profile does not
+allow it to read.

@@ -54,11 +54,14 @@ operator endpoints, `fwt_` the tenant's own.
 | `config docs` | print the configuration reference |
 | `status [-json]` | ask the daemon, or read the files read-only if it is not running |
 | `version` | print the version, commit and Go version |
+| `prepare-state` | in the snap, as root: create `$SNAP_DATA/state` for `snap_daemon`, moving the `identity/` and `wal/` of v0.1.1 into it (the install and post-refresh hooks and the daemon's start run it) |
 
 `status` reaches the daemon at `metrics.listen`, on loopback when that
 address is a wildcard such as `:9465`. Both its plain and its JSON output
 include the agent's version; when the daemon is not running, that is the
-version of the installed binary.
+version of the installed binary. In the snap the files belong to
+`snap_daemon`, so reading them needs sudo; with sudo, the command runs as
+`snap_daemon`, not as root.
 
 Outside a snap: `-data-dir DIR`, `-config file.json`, `-set key=value`.
 

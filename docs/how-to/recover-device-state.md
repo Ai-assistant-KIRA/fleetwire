@@ -3,8 +3,9 @@
 The agent repairs most damage to its local log when it starts (see
 [the device's local log](../explanation/wal.md)). It stops and waits for
 you only when `wal/state.json` cannot be read. The data directory is
-`/var/snap/fleetwire-agent/current` in the snap (`$SNAP_DATA`), and
-`-data-dir` (default `/var/lib/fleetwire-agent`) elsewhere.
+`/var/snap/fleetwire-agent/current/state` in the snap (`$SNAP_DATA/state`;
+up to v0.1.1 it was `$SNAP_DATA` itself), and `-data-dir` (default
+`/var/lib/fleetwire-agent`) elsewhere.
 
 ## What the agent repairs on its own
 
@@ -45,7 +46,7 @@ from it.
    and keep the damaged file:
 
    ```console
-   $ D=/var/snap/fleetwire-agent/current
+   $ D=/var/snap/fleetwire-agent/current/state
    $ sudo snap stop --disable fleetwire-agent.daemon
    $ sudo mv $D/wal/state.json $D/wal/state.json.bad
    $ sudo cat $D/identity/device.json
@@ -62,17 +63,21 @@ from it.
    ```
 
 3. On the device, write the new state with the watermark as both the ack
-   and the highest seq, then start the agent:
+   and the highest seq, give the file to `snap_daemon`, the user the
+   daemon runs as, then start the agent:
 
    ```console
    $ W=41871
    $ printf '{"version":1,"acked":%d,"max_seq_ever":%d,"pending_gaps":[]}\n' $W $W |
        sudo tee $D/wal/state.json >/dev/null
+   $ sudo chown snap_daemon:snap_daemon $D/wal/state.json
    $ sudo chmod 0600 $D/wal/state.json
    $ sudo snap start --enable fleetwire-agent.daemon
    ```
 
-   Leave out `device_id`; the agent fills it in from `identity/`.
+   Leave out `device_id`; the agent fills it in from `identity/`. A file
+   that root owns with mode 0600 stops the daemon with `permission
+   denied`.
 
 The agent now hands out seqs above both the watermark and the last record
 on disk, so no seq is reused. Any seq it sent above the watermark is

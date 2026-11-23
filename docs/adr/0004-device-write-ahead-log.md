@@ -13,8 +13,8 @@ flash storage, where every fsync costs wear and latency.
 
 ## Decision
 
-- Each reading is appended to a segmented log in `$SNAP_DATA/wal/` before it
-  can be sent. Segments hold records `length | crc32c | seq | payload`; the
+- Each reading is appended to a segmented log in `$SNAP_DATA/state/wal/`
+  (`$SNAP_DATA/wal/` up to v0.1.1, see ADR-0013) before it can be sent. Segments hold records `length | crc32c | seq | payload`; the
   CRC covers the seq and the payload; seqs inside a segment are consecutive.
 - Three sync modes: `always` (fsync after each append), `interval` (fsync
   every N ms, default 1000), `never` (page cache only). The uplink reads only

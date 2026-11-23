@@ -85,5 +85,6 @@ standard error.
 
 A device whose certificate expired (offline more than 30 days) must be
 enrolled again. Stop the agent, delete `identity/` and `wal/` in its data
-directory, set a new token, start it. It becomes a new device with a new
-seq space; readings it had not sent are lost.
+directory (`/var/snap/fleetwire-agent/current/state` in the snap), set a
+new token, start it. It becomes a new device with a new seq space;
+readings it had not sent are lost.
