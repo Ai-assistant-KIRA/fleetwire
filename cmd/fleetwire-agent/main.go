@@ -129,7 +129,7 @@ func daemon(ctx context.Context, e *env, logOut io.Writer) error {
 		health.Set("error", "data directory is not writable")
 		return fmt.Errorf("data dir: %w", err)
 	}
-	reg := telemetry.NewRegistry("fleetwire-agent")
+	reg := newRegistry(e.inSnap)
 	m := agent.NewMetrics(reg)
 	dev, err := agent.Open(agent.Options{
 		Dir: e.dataDir, Config: cfg, Collectors: collect.Builtin("/", e.dataDir), Metrics: m,
