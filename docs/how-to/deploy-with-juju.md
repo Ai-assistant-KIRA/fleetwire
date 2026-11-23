@@ -152,6 +152,15 @@ PostgreSQL the runtime logins could read other applications' data. The
 bundle also turns on the charm's `btree_gist` plugin, which the chunk
 overlap constraint needs.
 
+The bundle pins the two Canonical charms to the revisions the integration
+test passed with: `postgresql-k8s` revision 957 on `16/stable` and
+`kafka-k8s` revision 111 on `4/stable`. A channel alone deploys whatever
+revision it holds on the day. To move to newer revisions, change
+`revision:` in `charms/bundle.yaml`, run the integration test, and update
+the numbers here. Revisions are per architecture and these are the amd64
+ones. On arm64, `postgresql-k8s` 16/stable is revision 958, and `kafka-k8s`
+has arm64 builds only on `4/beta` and `4/edge` so far.
+
 ## 5. First operator token and a device
 
 ```console

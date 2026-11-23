@@ -104,9 +104,12 @@ From the Charmhub API and Canonical's docs:
 
 - `kafka-k8s`: channels `4/stable` (Apache Kafka 4, KRaft; the charm runs
   `roles=broker` and/or `roles=controller`) and `3/stable` (ZooKeeper). The
-  bundle uses `4/stable`. Clients use the `kafka_client` interface.
-- `postgresql-k8s`: `16/stable`. Clients use the `postgresql_client`
-  interface (`DatabaseRequires` from `data_platform_libs`).
+  bundle uses `4/stable`, pinned to revision 111 (amd64; `4/stable` has no
+  arm64 build, `4/beta` and `4/edge` do). Clients use the `kafka_client`
+  interface.
+- `postgresql-k8s`: `16/stable`, pinned in the bundle to revision 957
+  (amd64; arm64 is 958). Clients use the `postgresql_client` interface
+  (`DatabaseRequires` from `data_platform_libs`).
 - Integration tests: Canonical moved from pytest-operator to **Jubilant**
   (with `pytest-jubilant`); the Kafka K8s charm itself has migrated. The
   charms here use Jubilant.

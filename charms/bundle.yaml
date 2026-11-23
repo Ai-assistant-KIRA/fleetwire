@@ -3,6 +3,9 @@
 # directory) and see docs/how-to/deploy-with-juju.md for the secrets. On an
 # arm64 cluster, pack on an arm64 host and use the _arm64.charm files.
 #
+# The revisions of PostgreSQL and Kafka are the amd64 ones the integration
+# test passed with; a channel alone would deploy whatever it holds that day.
+#
 #   juju deploy ./bundle.yaml --trust
 bundle: kubernetes
 name: fleetwire
@@ -12,6 +15,7 @@ applications:
   postgresql-k8s:
     charm: postgresql-k8s
     channel: 16/stable
+    revision: 957
     scale: 1
     trust: true
     options:
@@ -20,6 +24,7 @@ applications:
   kafka-k8s:
     charm: kafka-k8s
     channel: 4/stable
+    revision: 111
     scale: 1
     trust: true
     # One unit acts as KRaft controller and broker, for a single VM.
