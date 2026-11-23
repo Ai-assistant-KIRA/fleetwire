@@ -146,24 +146,54 @@ func (s *Server) touch(p *principal) {
 	}
 }
 
+// touchDrainLimit bounds how long runTouches goes on, once told to stop,
+// recording the touches still queued.
+const touchDrainLimit = 5 * time.Second
+
+// runTouches records token use until ctx ends, then what is still queued.
+// Serve ends ctx once both listeners have drained, and the last requests'
+// touches may not have been picked up by then. A write under way when ctx
+// ends is not cut off either.
 func (s *Server) runTouches(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.drainTouches(context.WithoutCancel(ctx))
 			return
 		case p := <-s.touches:
-			tctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			var err error
-			if p.operator {
-				err = s.db.InTx(tctx, func(ctx context.Context, tx *store.Tx) error { return tx.TouchOperatorToken(ctx, p.tokenID) })
-			} else {
-				err = s.db.InTenantTx(tctx, p.tenant, func(ctx context.Context, tx *store.Tx) error { return tx.TouchAPIToken(ctx, p.tokenID) })
-			}
-			cancel()
-			if err != nil {
-				s.log.Warn("could not record token use", "token_id", p.tokenID, "err", err)
-			}
+			s.recordTouch(context.WithoutCancel(ctx), p)
 		}
+	}
+}
+
+func (s *Server) drainTouches(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, touchDrainLimit)
+	defer cancel()
+	for {
+		select {
+		case p := <-s.touches:
+			if ctx.Err() != nil {
+				s.log.Warn("token use not recorded at shutdown", "tokens", 1+len(s.touches))
+				return
+			}
+			s.recordTouch(ctx, p)
+		default:
+			return
+		}
+	}
+}
+
+func (s *Server) recordTouch(ctx context.Context, p *principal) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var err error
+	if p.operator {
+		err = s.db.InTx(ctx, func(ctx context.Context, tx *store.Tx) error { return tx.TouchOperatorToken(ctx, p.tokenID) })
+	} else {
+		err = s.db.InTenantTx(ctx, p.tenant, func(ctx context.Context, tx *store.Tx) error { return tx.TouchAPIToken(ctx, p.tokenID) })
+	}
+	if err != nil {
+		s.log.Warn("could not record token use", "token_id", p.tokenID, "err", err)
 	}
 }
 
