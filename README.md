@@ -18,6 +18,10 @@ PostgreSQL exclusion constraint makes storing a seq twice impossible.
 [The delivery guarantee](docs/explanation/delivery-guarantee.md) has the
 argument and its limits.
 
+Written by Reda Alaarabi. The documentation (tutorial, how-to guides,
+reference, explanations and ADRs) is published at
+<https://ai-assistant-kira.github.io/fleetwire/>.
+
 ```mermaid
 flowchart LR
   subgraph Device["Device: strict snap on Ubuntu Core 24"]
