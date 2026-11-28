@@ -3,7 +3,7 @@ module github.com/Ai-assistant-KIRA/fleetwire
 go 1.27.4
 
 require (
-	github.com/eclipse/paho.golang v0.23.0
+	github.com/eclipse/paho.golang v0.24.0
 	github.com/exaring/otelpgx v0.13.0
 	github.com/getkin/kin-openapi v0.153.0
 	github.com/google/uuid v1.6.0
