@@ -2,7 +2,7 @@
 # One Dockerfile for every service image: docker build --build-arg BINARY=fleetwire-api .
 # Base images are pinned to their multi-arch index digests so a rebuilt tag
 # cannot change what is built; Dependabot proposes digest updates.
-FROM golang:1.27.4@sha256:205c7636d74e0ffbe3d007162df7d74f859f5a8c8322dfb9f907977686c126cf AS build
+FROM golang:1.27.4@sha256:5f1b98fa02fe396ebce2a0227a0e08309e11792915b9dd2e1f71053d7e7e6666 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
